@@ -2,6 +2,8 @@
 
 Backend aplikasi **Mitra Barito Group** (sistem ERP pertambangan), hasil migrasi dari Laravel (proyek `mbg-online`) ke **Node.js**.
 
+> **Tujuan & kebutuhan produk**: lihat [PRD.md](./PRD.md).
+
 ## Tech Stack
 
 - **NestJS 10** + TypeScript
