@@ -1,0 +1,173 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================================
+// AUTH — konkret (nrp + NIK saat pertama, nrp + PIN setelahnya)
+// =====================================================================
+model User {
+  id        Int       @id @default(autoincrement())
+  nrp       String    @unique
+  name      String
+  email     String?   @unique
+  password  String? // hash NIK (login pertama)
+  pin       String? // hash PIN (null = belum set PIN)
+  role      Int       @default(1) // 1..5
+  authLogin String? // token lama (kompatibilitas)
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([role])
+}
+
+// =====================================================================
+// EAV CORE — SEMUA master & data dinamis (karyawan, perusahaan, jabatan,
+// agama, unit, kode batu, dll) — field bisa bertambah tanpa ubah skema.
+// =====================================================================
+
+// "Tabel" dinamis (dulu database_tables)
+model Entity {
+  id          Int       @id @default(autoincrement())
+  code        String    @unique // e.g. KARYAWAN, PERUSAHAAN, AGAMA, KODE-ABSEN
+  name        String // description_table
+  menu        String? // menu_table (pengelompokan menu)
+  parentId    Int? // parent_table (tabel anak -> parent)
+  primaryCode String? // primary_table (field code yg jadi PK)
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  parent   Entity?  @relation("EntityTree", fields: [parentId], references: [id])
+  children Entity[] @relation("EntityTree")
+  fields   Field[]
+  values   Value[]
+
+  @@index([parentId])
+}
+
+// Kolom dinamis (dulu database_fields)
+model Field {
+  id         Int      @id @default(autoincrement())
+  entityId   Int
+  code       String // code_field (e.g. NRP, NAMA-KARYAWAN)
+  name       String // description_field
+  fullCode   String // full_code_field = entity.code + '-' + code
+  type       String   @default("TEXT") // TEXT/DATE/COLOR/DARI-TABEL/INPUT-AUTOCOMPLITE/GABUNGAN/HIDDEN
+  level      Int      @default(1) // level_data_field (role 1..5)
+  sort       Int      @default(0) // sort_field
+  visibility String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  entity     Entity     @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  values     Value[]
+  dataSource DataSource?
+
+  @@unique([entityId, code])
+}
+
+// Nilai data (dulu database_data) — EAV murni
+model Value {
+  id         Int       @id @default(autoincrement())
+  entityId   Int
+  fieldId    Int
+  recordCode String // code_data = PK record (NRP / ISLAM / DT-220 ...)
+  recordUuid String? // uuid_data
+  value      String? // value_data
+  dateStart  DateTime?
+  dateEnd    DateTime? // soft-delete / histori
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  entity Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  field  Field  @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@index([entityId, recordCode])
+  @@index([fieldId])
+}
+
+// Lookup antar tabel (dulu database_data_sources) — untuk DARI-TABEL / AUTOCOMPLITE
+model DataSource {
+  id           Int     @id @default(autoincrement())
+  fieldId      Int     @unique
+  entitySource String? // table_data_source (entity sumber)
+  fieldSource  String? // field_get_data_source (field yg diambil)
+
+  field Field @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+}
+
+// Gabungan field (dulu database_field_shows) — untuk tipe GABUNGAN
+model FieldShow {
+  id            Int     @id @default(autoincrement())
+  entityCode    String
+  fieldCode     String
+  fieldShowCode String
+  splitBy       String? // pemisah (spasi, "-", dll)
+  sort          Int     @default(0)
+}
+
+// Template tampilan per-user (dulu user_templates)
+model UserTemplate {
+  id           Int     @id @default(autoincrement())
+  employeeUuid String
+  entityGet    String?
+  entityCode   String?
+  fieldCode    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([employeeUuid])
+}
+
+// Menu / group form (dulu group_forms)
+model GroupForm {
+  id          Int      @id @default(autoincrement())
+  uuid        String   @unique
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// =====================================================================
+// TRANSAKSIONAL — konkret (harian/bulanan, butuh performa & indeks)
+// =====================================================================
+
+// Absensi (dulu employee_absens / DATABASE-ABSENSI)
+model Attendance {
+  id          Int       @id @default(autoincrement())
+  employeeNrp String // referensi ke recordCode KARYAWAN di EAV
+  date        DateTime  @db.Date
+  shiftCode   String?
+  code        String? // KODE-ABSEN (A, TC, DS, NS, SP, ...)
+  checkIn     DateTime?
+  checkOut    DateTime?
+  note        String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([employeeNrp, date])
+  @@index([date])
+  @@index([employeeNrp])
+}
+
+// Slip gaji (dulu slips)
+model Payslip {
+  id          Int      @id @default(autoincrement())
+  employeeNrp String
+  year        Int
+  month       Int
+  codeFile    String   @unique // NRP-tahun-bulan
+  fileUrl     String? // URL PDF di server assets
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([employeeNrp, year, month])
+  @@index([year, month])
+}
