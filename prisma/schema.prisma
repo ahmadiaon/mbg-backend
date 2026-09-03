@@ -11,17 +11,22 @@ datasource db {
 // AUTH — konkret (nrp + NIK saat pertama, nrp + PIN setelahnya)
 // =====================================================================
 model User {
-  id        Int       @id @default(autoincrement())
-  nrp       String    @unique
+  id        Int      @id @default(autoincrement())
+  nrp       String   @unique
   name      String
-  email     String?   @unique
+  email     String?  @unique
   password  String? // hash NIK (login pertama)
   pin       String? // hash PIN (null = belum set PIN)
-  role      Int       @default(1) // 1..5
+  role      Int      @default(1) // 1..5
   authLogin String? // token lama (kompatibilitas)
-  active    Boolean   @default(true)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employmentStatuses EmploymentStatus[]
+  featureOverrides   UserFeatureAccess[]
+  auditLogs          HistoricalAuditLog[]
+  approvalActions    ApprovalAction[]
 
   @@index([role])
 }
@@ -33,15 +38,15 @@ model User {
 
 // "Tabel" dinamis (dulu database_tables)
 model Entity {
-  id          Int       @id @default(autoincrement())
-  code        String    @unique // e.g. KARYAWAN, PERUSAHAAN, AGAMA, KODE-ABSEN
+  id          Int      @id @default(autoincrement())
+  code        String   @unique // e.g. KARYAWAN, PERUSAHAAN, AGAMA, KODE-ABSEN
   name        String // description_table
   menu        String? // menu_table (pengelompokan menu)
   parentId    Int? // parent_table (tabel anak -> parent)
   primaryCode String? // primary_table (field code yg jadi PK)
-  active      Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   parent   Entity?  @relation("EntityTree", fields: [parentId], references: [id])
   children Entity[] @relation("EntityTree")
@@ -65,7 +70,7 @@ model Field {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  entity     Entity     @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  entity     Entity      @relation(fields: [entityId], references: [id], onDelete: Cascade)
   values     Value[]
   dataSource DataSource?
 
@@ -114,7 +119,7 @@ model FieldShow {
 
 // Template tampilan per-user (dulu user_templates)
 model UserTemplate {
-  id           Int     @id @default(autoincrement())
+  id           Int      @id @default(autoincrement())
   employeeUuid String
   entityGet    String?
   entityCode   String?
@@ -170,4 +175,308 @@ model Payslip {
 
   @@unique([employeeNrp, year, month])
   @@index([year, month])
+}
+
+// =====================================================================
+// AUTHORITY — role level, status kerja, struktur organisasi, dan feature
+// =====================================================================
+
+model RoleLevel {
+  id          Int      @id @default(autoincrement())
+  level       Int      @unique // 1..15
+  code        String   @unique
+  name        String
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  employmentStatuses EmploymentStatus[]
+  featurePolicies    FeatureAccessPolicy[]
+  positions          Position[]
+}
+
+model OrganizationUnit {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique
+  name      String
+  type      String // GROUP, COMPANY, PROJECT, DEPARTMENT, DIVISION
+  parentId  Int?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parent      OrganizationUnit?  @relation("OrganizationTree", fields: [parentId], references: [id])
+  children    OrganizationUnit[] @relation("OrganizationTree")
+  companies   EmploymentStatus[] @relation("EmploymentCompany")
+  projects    EmploymentStatus[] @relation("EmploymentProject")
+  departments EmploymentStatus[] @relation("EmploymentDepartment")
+  divisions   EmploymentStatus[] @relation("EmploymentDivision")
+
+  @@index([parentId])
+  @@index([type, active])
+}
+
+model Position {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique
+  name        String
+  roleLevelId Int?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roleLevel          RoleLevel?         @relation(fields: [roleLevelId], references: [id], onDelete: SetNull)
+  employmentStatuses EmploymentStatus[]
+
+  @@index([roleLevelId])
+}
+
+model EmploymentStatus {
+  id           Int       @id @default(autoincrement())
+  userId       Int
+  employeeNrp  String
+  statusCode   String // ACTIVE, INACTIVE, TRANSFERRED, TERMINATED, SUSPENDED
+  roleLevelId  Int
+  positionId   Int?
+  companyId    Int?
+  projectId    Int?
+  departmentId Int?
+  divisionId   Int?
+  startDate    DateTime  @db.Date
+  endDate      DateTime? @db.Date
+  isPrimary    Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleLevel  RoleLevel         @relation(fields: [roleLevelId], references: [id])
+  position   Position?         @relation(fields: [positionId], references: [id], onDelete: SetNull)
+  company    OrganizationUnit? @relation("EmploymentCompany", fields: [companyId], references: [id], onDelete: SetNull)
+  project    OrganizationUnit? @relation("EmploymentProject", fields: [projectId], references: [id], onDelete: SetNull)
+  department OrganizationUnit? @relation("EmploymentDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
+  division   OrganizationUnit? @relation("EmploymentDivision", fields: [divisionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, statusCode])
+  @@index([employeeNrp, statusCode])
+  @@index([roleLevelId, statusCode])
+  @@index([companyId, projectId, departmentId, divisionId])
+  @@index([startDate, endDate])
+}
+
+model FeatureDefinition {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique
+  name        String
+  description String?
+  route       String?
+  icon        String?
+  menuGroup   String?
+  sort        Int      @default(0)
+  active      Boolean  @default(true)
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  policies  FeatureAccessPolicy[]
+  overrides UserFeatureAccess[]
+
+  @@index([active, sort])
+}
+
+model FeatureAccessPolicy {
+  id                   Int      @id @default(autoincrement())
+  featureId            Int
+  roleLevelId          Int
+  employmentStatusCode String   @default("ACTIVE")
+  canRead              Boolean  @default(false)
+  canWrite             Boolean  @default(false)
+  canEdit              Boolean  @default(false)
+  canDelete            Boolean  @default(false)
+  canImport            Boolean  @default(false)
+  canExport            Boolean  @default(false)
+  canSubmit            Boolean  @default(false)
+  canApprove           Boolean  @default(false)
+  canReject            Boolean  @default(false)
+  canViewHistory       Boolean  @default(false)
+  canRestore           Boolean  @default(false)
+  scopeType            String   @default("SELF")
+  active               Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  feature   FeatureDefinition @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  roleLevel RoleLevel         @relation(fields: [roleLevelId], references: [id], onDelete: Cascade)
+
+  @@unique([featureId, roleLevelId, employmentStatusCode])
+  @@index([roleLevelId, employmentStatusCode, active])
+}
+
+model UserFeatureAccess {
+  id                   Int       @id @default(autoincrement())
+  userId               Int
+  featureId            Int
+  employmentStatusCode String?
+  effect               String    @default("ALLOW") // ALLOW / DENY
+  canRead              Boolean?
+  canWrite             Boolean?
+  canEdit              Boolean?
+  canDelete            Boolean?
+  canApprove           Boolean?
+  canViewHistory       Boolean?
+  scopeType            String?
+  reason               String
+  expiresAt            DateTime?
+  createdBy            Int?
+  active               Boolean   @default(true)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  feature FeatureDefinition @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@index([userId, active, expiresAt])
+  @@index([featureId, employmentStatusCode])
+}
+
+// =====================================================================
+// HISTORICAL DATA + APPROVAL — generik untuk data yang membutuhkan histori
+// =====================================================================
+
+model HistoricalDefinition {
+  id               Int      @id @default(autoincrement())
+  code             String   @unique
+  name             String
+  entityCode       String?
+  historyEnabled   Boolean  @default(true)
+  approvalRequired Boolean  @default(true)
+  workflowId       Int?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workflow ApprovalWorkflow?  @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  records  HistoricalRecord[]
+
+  @@index([active])
+}
+
+model HistoricalRecord {
+  id               Int      @id @default(autoincrement())
+  definitionId     Int
+  recordCode       String
+  currentVersionId Int?
+  status           String   @default("DRAFT")
+  createdBy        Int
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  definition HistoricalDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  versions   HistoricalVersion[]
+  auditLogs  HistoricalAuditLog[]
+  approvals  ApprovalInstance[]
+
+  @@unique([definitionId, recordCode])
+  @@index([status, definitionId])
+}
+
+model HistoricalVersion {
+  id            Int      @id @default(autoincrement())
+  recordId      Int
+  versionNumber Int
+  snapshotJson  Json
+  changeReason  String?
+  createdBy     Int
+  createdAt     DateTime @default(now())
+
+  record HistoricalRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([recordId, versionNumber])
+  @@index([recordId, createdAt])
+}
+
+model HistoricalAuditLog {
+  id          Int      @id @default(autoincrement())
+  recordId    Int
+  versionId   Int?
+  action      String
+  fieldCode   String?
+  oldValue    Json?
+  newValue    Json?
+  reason      String?
+  performedBy Int
+  createdAt   DateTime @default(now())
+
+  record    HistoricalRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  performer User             @relation(fields: [performedBy], references: [id])
+
+  @@index([recordId, createdAt])
+  @@index([performedBy, createdAt])
+}
+
+model ApprovalWorkflow {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique
+  name      String
+  version   Int      @default(1)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  definitions HistoricalDefinition[]
+  steps       ApprovalWorkflowStep[]
+  instances   ApprovalInstance[]
+}
+
+model ApprovalWorkflowStep {
+  id                 Int     @id @default(autoincrement())
+  workflowId         Int
+  stepNumber         Int
+  name               String
+  requiredRoleMin    Int?
+  requiredRoleMax    Int?
+  requiredPermission String?
+  scopeType          String  @default("SELF")
+  approverType       String  @default("ROLE_LEVEL")
+  excludeAdmin       Boolean @default(true)
+  excludeRequester   Boolean @default(true)
+  active             Boolean @default(true)
+
+  workflow ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, stepNumber])
+}
+
+model ApprovalInstance {
+  id                 Int       @id @default(autoincrement())
+  historicalRecordId Int
+  workflowId         Int
+  currentStep        Int       @default(1)
+  status             String    @default("PENDING")
+  submittedBy        Int
+  submittedAt        DateTime  @default(now())
+  completedAt        DateTime?
+
+  record   HistoricalRecord @relation(fields: [historicalRecordId], references: [id], onDelete: Cascade)
+  workflow ApprovalWorkflow @relation(fields: [workflowId], references: [id])
+  actions  ApprovalAction[]
+
+  @@index([historicalRecordId, status])
+  @@index([workflowId, currentStep, status])
+}
+
+model ApprovalAction {
+  id                 Int      @id @default(autoincrement())
+  approvalInstanceId Int
+  stepNumber         Int
+  approverUserId     Int
+  action             String // APPROVED / REJECTED / CANCELLED
+  note               String?
+  createdAt          DateTime @default(now())
+
+  instance ApprovalInstance @relation(fields: [approvalInstanceId], references: [id], onDelete: Cascade)
+  approver User             @relation(fields: [approverUserId], references: [id])
+
+  @@index([approvalInstanceId, stepNumber])
+  @@index([approverUserId, createdAt])
 }
