@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { EavModule } from './eav/eav.module';
 import { PayslipModule } from './payslip/payslip.module';
 import { DocsModule } from './docs/docs.module';
+import { AuthorityModule } from './authority/authority.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { DocsModule } from './docs/docs.module';
     EavModule,
     PayslipModule,
     DocsModule,
+    AuthorityModule,
   ],
   controllers: [AppController],
   providers: [AppService],

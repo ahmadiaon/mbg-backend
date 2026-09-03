@@ -76,6 +76,78 @@ async function main() {
     });
   }
 
+  const featureRows = await prisma.featureDefinition.findMany({
+    where: { code: { in: features.map(([code]) => code) } },
+  });
+  const featureByCode = new Map(featureRows.map((feature) => [feature.code, feature]));
+  const roleByLevel = new Map(
+    (await prisma.roleLevel.findMany({ where: { level: { gte: 1, lte: 15 } } })).map((role) => [role.level, role]),
+  );
+  const approvalLevels = new Set([4, 6, 8, 10, 12]);
+
+  for (const level of Array.from({ length: 13 }, (_, i) => i + 1)) {
+    const roleLevel = roleByLevel.get(level);
+    if (!roleLevel) continue;
+    const database = featureByCode.get('DATABASE');
+    const historical = featureByCode.get('HISTORICAL-DATA');
+    if (database) {
+      await prisma.featureAccessPolicy.upsert({
+        where: {
+          featureId_roleLevelId_employmentStatusCode: {
+            featureId: database.id,
+            roleLevelId: roleLevel.id,
+            employmentStatusCode: 'ACTIVE',
+          },
+        },
+        update: { canRead: true, canWrite: level >= 2 && level !== 13, canEdit: level >= 2 && level !== 13, canViewHistory: level >= 3, scopeType: level === 1 ? 'SELF' : 'DIVISION' },
+        create: {
+          featureId: database.id,
+          roleLevelId: roleLevel.id,
+          employmentStatusCode: 'ACTIVE',
+          canRead: true,
+          canWrite: level >= 2 && level !== 13,
+          canEdit: level >= 2 && level !== 13,
+          canViewHistory: level >= 3,
+          scopeType: level === 1 ? 'SELF' : 'DIVISION',
+        },
+      });
+    }
+    if (historical) {
+      await prisma.featureAccessPolicy.upsert({
+        where: {
+          featureId_roleLevelId_employmentStatusCode: {
+            featureId: historical.id,
+            roleLevelId: roleLevel.id,
+            employmentStatusCode: 'ACTIVE',
+          },
+        },
+        update: {
+          canRead: true,
+          canWrite: level >= 2 && level !== 13,
+          canEdit: level >= 2 && level !== 13,
+          canSubmit: level >= 2 && level !== 13,
+          canApprove: approvalLevels.has(level),
+          canReject: approvalLevels.has(level),
+          canViewHistory: true,
+          scopeType: level === 1 ? 'SELF' : level >= 11 ? 'ALL_COMPANIES' : 'DIVISION',
+        },
+        create: {
+          featureId: historical.id,
+          roleLevelId: roleLevel.id,
+          employmentStatusCode: 'ACTIVE',
+          canRead: true,
+          canWrite: level >= 2 && level !== 13,
+          canEdit: level >= 2 && level !== 13,
+          canSubmit: level >= 2 && level !== 13,
+          canApprove: approvalLevels.has(level),
+          canReject: approvalLevels.has(level),
+          canViewHistory: true,
+          scopeType: level === 1 ? 'SELF' : level >= 11 ? 'ALL_COMPANIES' : 'DIVISION',
+        },
+      });
+    }
+  }
+
   // 2. Demo EAV: entitas KARYAWAN (dinamis — field bisa ditambah kapan saja)
   const entity = await prisma.entity.upsert({
     where: { code: 'KARYAWAN' },
