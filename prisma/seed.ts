@@ -85,6 +85,50 @@ async function main() {
   );
   const approvalLevels = new Set([4, 6, 8, 10, 12]);
 
+  const legacyFeatureRules: Record<string, { minLevel: number; scopeType: string }> = {
+    ATTENDANCE: { minLevel: 2, scopeType: 'DIVISION' },
+    PAYROLL: { minLevel: 2, scopeType: 'DIVISION' },
+    RECRUITMENT: { minLevel: 2, scopeType: 'DIVISION' },
+    'FILE-MANAGER': { minLevel: 2, scopeType: 'DIVISION' },
+    'WATER-LEVEL': { minLevel: 1, scopeType: 'DIVISION' },
+    ORGANIZATION: { minLevel: 1, scopeType: 'DIVISION' },
+  };
+
+  for (const [featureCode, rule] of Object.entries(legacyFeatureRules)) {
+    const feature = featureByCode.get(featureCode);
+    if (!feature) continue;
+    for (let level = rule.minLevel; level <= 13; level++) {
+      const roleLevel = roleByLevel.get(level);
+      if (!roleLevel) continue;
+      await prisma.featureAccessPolicy.upsert({
+        where: {
+          featureId_roleLevelId_employmentStatusCode: {
+            featureId: feature.id,
+            roleLevelId: roleLevel.id,
+            employmentStatusCode: 'ACTIVE',
+          },
+        },
+        update: {
+          canRead: true,
+          canWrite: level !== 13,
+          canEdit: level !== 13,
+          canViewHistory: level >= 3,
+          scopeType: level >= 11 ? 'ALL_COMPANIES' : rule.scopeType,
+        },
+        create: {
+          featureId: feature.id,
+          roleLevelId: roleLevel.id,
+          employmentStatusCode: 'ACTIVE',
+          canRead: true,
+          canWrite: level !== 13,
+          canEdit: level !== 13,
+          canViewHistory: level >= 3,
+          scopeType: level >= 11 ? 'ALL_COMPANIES' : rule.scopeType,
+        },
+      });
+    }
+  }
+
   for (const level of Array.from({ length: 13 }, (_, i) => i + 1)) {
     const roleLevel = roleByLevel.get(level);
     if (!roleLevel) continue;
