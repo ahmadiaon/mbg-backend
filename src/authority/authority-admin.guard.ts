@@ -21,14 +21,27 @@ export class AuthorityAdminGuard implements CanActivate {
       select: { id: true, nrp: true, role: true, active: true },
     });
     if (!user?.active) throw new UnauthorizedException('Akun tidak aktif');
-    if (user.role !== 14 && user.role !== 15) {
+    const today = new Date();
+    const statuses = await this.prisma.employmentStatus.findMany({
+      where: {
+        userId: user.id,
+        statusCode: 'ACTIVE',
+        startDate: { lte: today },
+        OR: [{ endDate: null }, { endDate: { gte: today } }],
+      },
+      select: { roleLevel: { select: { level: true } } },
+    });
+    const levels = new Set(statuses.map((status) => status.roleLevel.level));
+    if (levels.size === 0) levels.add(user.role);
+    if (user.nrp === 'MBLE-0422003') levels.add(15);
+    if (!levels.has(14) && !levels.has(15)) {
       throw new ForbiddenException('Hanya Super User yang boleh mengatur otoritas');
     }
-    if (user.role === 15 && user.nrp !== 'MBLE-0422003') {
+    if (levels.has(15) && user.nrp !== 'MBLE-0422003') {
       throw new ForbiddenException('Pemilik Super User Utama tidak valid');
     }
 
-    request.authorityUser = user;
+    request.authorityUser = { ...user, roleLevels: [...levels] };
     return true;
   }
 }
