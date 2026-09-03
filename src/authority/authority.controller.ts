@@ -52,6 +52,12 @@ export class AuthorityController {
     return this.admin.listFeatures();
   }
 
+  @Post('admin/features')
+  @UseGuards(AuthorityAdminGuard)
+  createFeature(@Body() body: Record<string, unknown>) {
+    return this.admin.createFeature(body);
+  }
+
   @Get('admin/users')
   @UseGuards(AuthorityAdminGuard)
   users() {

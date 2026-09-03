@@ -36,6 +36,28 @@ export class AuthorityAdminService {
     });
   }
 
+  async createFeature(body: Record<string, unknown>) {
+    const rawCode = this.optionalString(body.code);
+    const name = this.optionalString(body.name);
+    if (!rawCode || !name) throw new BadRequestException('code dan name feature wajib diisi');
+    const code = rawCode.replace(/[^a-zA-Z0-9&_-]/g, '-').toUpperCase();
+    if (!code) throw new BadRequestException('code feature tidak valid');
+    const exists = await this.prisma.featureDefinition.findUnique({ where: { code } });
+    if (exists) throw new ConflictException(`Feature '${code}' sudah ada`);
+    return this.prisma.featureDefinition.create({
+      data: {
+        code,
+        name,
+        description: this.optionalString(body.description),
+        route: this.optionalString(body.route),
+        icon: this.optionalString(body.icon) ?? 'bi-grid',
+        menuGroup: this.optionalString(body.menuGroup),
+        sort: this.optionalInt(body.sort) ?? 0,
+        isSystem: false,
+      },
+    });
+  }
+
   listUsers() {
     return this.prisma.user.findMany({
       where: { active: true },
