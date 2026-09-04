@@ -25,6 +25,7 @@ import { UpdateFieldDto } from './dto/update-field.dto';
 import { StoreRecordDto } from './dto/store-record.dto';
 import { AssetsService } from '../assets/assets.service';
 import { EffectiveAccessService } from '../authority/effective-access.service';
+import { AuthorityAdminGuard } from '../authority/authority-admin.guard';
 
 @Controller('eav')
 @UseGuards(JwtAuthGuard)
@@ -49,16 +50,19 @@ export class EavController {
   }
 
   @Post('entities')
+  @UseGuards(AuthorityAdminGuard)
   createEntity(@Body() dto: CreateEntityDto) {
     return this.eav.createEntity(dto);
   }
 
   @Put('entities/:code')
+  @UseGuards(AuthorityAdminGuard)
   updateEntity(@Param('code') code: string, @Body() dto: UpdateEntityDto) {
     return this.eav.updateEntity(code, dto);
   }
 
   @Delete('entities/:code')
+  @UseGuards(AuthorityAdminGuard)
   deleteEntity(@Param('code') code: string) {
     return this.eav.deleteEntity(code);
   }
@@ -69,11 +73,13 @@ export class EavController {
   }
 
   @Post('entities/:code/fields')
+  @UseGuards(AuthorityAdminGuard)
   createField(@Param('code') code: string, @Body() dto: CreateFieldDto) {
     return this.eav.createField(code, dto);
   }
 
   @Put('entities/:code/fields/:fieldCode')
+  @UseGuards(AuthorityAdminGuard)
   updateField(
     @Param('code') code: string,
     @Param('fieldCode') fieldCode: string,
@@ -83,6 +89,7 @@ export class EavController {
   }
 
   @Delete('entities/:code/fields/:fieldCode')
+  @UseGuards(AuthorityAdminGuard)
   deleteField(
     @Param('code') code: string,
     @Param('fieldCode') fieldCode: string,
@@ -91,7 +98,9 @@ export class EavController {
   }
 
   @Get('entities/:code/records')
-  records(@Param('code') code: string) {
+  async records(@Param('code') code: string, @Req() req: Request) {
+    const user = req['user'] as JwtPayload;
+    await this.access.assertAccess(user.sub, 'DATABASE', 'read');
     return this.eav.getRecords(code);
   }
 
@@ -121,7 +130,10 @@ export class EavController {
 
   @Post('entities/:code/records/:recordCode/correction')
   correction(@Param('code') code: string, @Param('recordCode') recordCode: string, @Body('values') values: Record<string, string>, @Req() req: Request) {
-    return this.eav.correctRecord(code, recordCode, values || {}, (req['user'] as JwtPayload).sub);
+    const user = req['user'] as JwtPayload;
+    return this.access.assertAccess(user.sub, 'HISTORICAL-DATA', 'edit').then(() =>
+      this.eav.correctRecord(code, recordCode, values || {}, user.sub),
+    );
   }
 
   @Post('entities/:code/records/:recordCode/historical-update')
@@ -131,7 +143,10 @@ export class EavController {
     @Body() body: { changeTypeCode: string; values: Record<string, string> },
     @Req() req: Request,
   ) {
-    return this.eav.createHistoricalChange(code, recordCode, body.changeTypeCode, body.values || {}, (req['user'] as JwtPayload).sub);
+    const user = req['user'] as JwtPayload;
+    return this.access.assertAccess(user.sub, 'HISTORICAL-DATA', 'submit').then(() =>
+      this.eav.createHistoricalChange(code, recordCode, body.changeTypeCode, body.values || {}, user.sub),
+    );
   }
 
   @Post('historical-changes/:id/approve')
@@ -151,20 +166,27 @@ export class EavController {
   }
 
   @Post('entities/:code/records')
-  storeRecord(@Param('code') code: string, @Body() dto: StoreRecordDto) {
+  async storeRecord(@Param('code') code: string, @Body() dto: StoreRecordDto, @Req() req: Request) {
+    const user = req['user'] as JwtPayload;
+    await this.access.assertAccess(user.sub, 'DATABASE', 'write');
     return this.eav.storeRecord(code, dto);
   }
 
   @Delete('entities/:code/records/:recordCode')
-  deleteRecord(
+  async deleteRecord(
     @Param('code') code: string,
     @Param('recordCode') recordCode: string,
+    @Req() req: Request,
   ) {
+    const user = req['user'] as JwtPayload;
+    await this.access.assertAccess(user.sub, 'DATABASE', 'delete');
     return this.eav.deleteRecord(code, recordCode);
   }
 
   @Get('entities/:code/export')
-  async exportRecords(@Param('code') code: string, @Res() res: Response) {
+  async exportRecords(@Param('code') code: string, @Res() res: Response, @Req() req: Request) {
+    const user = req['user'] as JwtPayload;
+    await this.access.assertAccess(user.sub, 'DATABASE', 'export');
     const { filename, buffer } = await this.eav.exportRecords(code);
     res.setHeader(
       'Content-Type',
@@ -179,8 +201,10 @@ export class EavController {
 
   @Post('import')
   @UseInterceptors(FileInterceptor('file'))
-  importRecords(@UploadedFile() file: { buffer: Buffer }) {
+  async importRecords(@UploadedFile() file: { buffer: Buffer }, @Req() req: Request) {
     if (!file) throw new Error('File tidak ditemukan');
+    const user = req['user'] as JwtPayload;
+    await this.access.assertAccess(user.sub, 'DATABASE', 'import');
     return this.eav.importRecords(file.buffer);
   }
 

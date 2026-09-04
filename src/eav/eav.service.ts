@@ -306,7 +306,13 @@ export class EavService {
   }
 
   async getRecordFamily(entityCode: string, recordCode: string) {
-    const root = await this.getEntityByCode(entityCode);
+    const selected = await this.getEntityByCode(entityCode);
+    let root = selected;
+    while (root.parentId) {
+      const parent = await this.prisma.entity.findUnique({ where: { id: root.parentId } });
+      if (!parent) break;
+      root = parent as typeof root;
+    }
     const entities: { id: number; code: string; name: string; parentId: number | null }[] = [];
     const visit = async (entity: typeof root) => {
       entities.push({ id: entity.id, code: entity.code, name: entity.name, parentId: entity.parentId });
@@ -317,22 +323,59 @@ export class EavService {
 
     const ids = entities.map((entity) => entity.id);
     const values = await this.prisma.value.findMany({
-      where: { entityId: { in: ids }, recordCode, dateEnd: null },
+      where: { entityId: { in: ids }, dateEnd: null },
       include: { field: true },
       orderBy: [{ entityId: 'asc' }, { field: { sort: 'asc' } }],
     });
-    const byEntity: Record<string, { recordCode: string; recordUuid: string | null; values: Record<string, string | null> }> = {};
-    for (const entity of entities) {
-      byEntity[entity.code] = { recordCode, recordUuid: null, values: {} };
-    }
+    const rootRecordCode = selected.id === root.id
+      ? recordCode
+      : values.find((value) => value.entityId === selected.id && value.recordCode === recordCode && value.field.type.toUpperCase() === 'HIDDEN')?.value || recordCode;
+    const byEntity: Record<string, Array<{ recordCode: string; recordUuid: string | null; values: Record<string, string | null>; hiddenValues: string[] }>> = {};
+    for (const entity of entities) byEntity[entity.code] = [];
+
+    // Kelompokkan semua value menjadi row per entity/record terlebih dahulu.
     for (const value of values) {
       const entity = entities.find((item) => item.id === value.entityId);
       if (!entity) continue;
-      byEntity[entity.code].recordUuid = value.recordUuid;
-      byEntity[entity.code].values[value.field.code] = value.value;
+      let row = byEntity[entity.code].find((item) => item.recordCode === value.recordCode);
+      if (!row) {
+        row = { recordCode: value.recordCode, recordUuid: value.recordUuid, values: {}, hiddenValues: [] };
+        byEntity[entity.code].push(row);
+      }
+      row.values[value.field.code] = value.value;
+      if (value.field.type.toUpperCase() === 'HIDDEN' && value.value) row.hiddenValues.push(value.value);
+    }
+
+    // Root selalu menjadi titik awal. Child ditelusuri memakai field HIDDEN
+    // yang menunjuk record parent, termasuk child berulang dan nested child.
+    const included = new Map<string, Set<string>>();
+    included.set(root.code, new Set([rootRecordCode]));
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const entity of entities) {
+        if (entity.id === root.id || !entity.parentId) continue;
+        const parent = entities.find((item) => item.id === entity.parentId);
+        if (!parent) continue;
+        const parentCodes = included.get(parent.code) ?? new Set<string>();
+        const own = included.get(entity.code) ?? new Set<string>();
+        const rows = byEntity[entity.code];
+        for (const row of rows) {
+          const pointsToParent = row.hiddenValues.some((value) => parentCodes.has(value));
+          if (pointsToParent && !own.has(row.recordCode)) {
+            own.add(row.recordCode);
+            changed = true;
+          }
+        }
+        included.set(entity.code, own);
+      }
+    }
+    for (const entity of entities) {
+      const allowed = included.get(entity.code) ?? new Set<string>();
+      byEntity[entity.code] = byEntity[entity.code].filter((row) => allowed.has(row.recordCode));
     }
     return {
-      root: { entityCode: root.code, recordCode },
+      root: { entityCode: root.code, recordCode: rootRecordCode },
       entities,
       records: byEntity,
       historyAvailable: true,
@@ -386,7 +429,7 @@ export class EavService {
       where: { entityCode, fieldCode },
       orderBy: { sort: 'asc' },
     });
-    const chunks: string[] = [];
+    const chunks: { value: string; separator: string }[] = [];
     for (const show of shows) {
       const sourceCode = show.tableShowCode || entityCode;
       const sourceEntity = await this.getEntityByCode(sourceCode);
@@ -406,9 +449,9 @@ export class EavService {
       const value = await this.prisma.value.findFirst({
         where: { entityId: sourceEntity.id, fieldId: sourceField.id, recordCode: sourceRecordCode, dateEnd: null },
       });
-      if (value?.value) chunks.push(value.value);
+      if (value?.value) chunks.push({ value: value.value, separator: show.splitBy || '' });
     }
-    return chunks.map((value, index) => `${index ? shows[index - 1]?.splitBy || '' : ''}${value}`).join('');
+    return chunks.map((chunk, index) => `${index ? chunks[index - 1].separator : ''}${chunk.value}`).join('');
   }
 
   async createHistoricalChange(

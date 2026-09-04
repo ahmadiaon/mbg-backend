@@ -83,9 +83,12 @@ export class EffectiveAccessService {
 
     const statuses = await this.resolveActiveStatuses(userId);
     const levels = new Set(statuses.map((status) => status.roleLevel.level));
-    // Kompatibilitas user lama sebelum status kerja dimigrasikan.
+    if (levels.size === 0) {
+      const grade = await this.resolveGradeFromEav(user.nrp);
+      if (grade !== null) levels.add(grade);
+    }
+    // Kompatibilitas data lama sebelum GRADE/status kerja dimigrasikan.
     if (levels.size === 0 && user.role >= 1 && user.role <= 15) levels.add(user.role);
-    if (user.nrp === 'MBLE-0422003') levels.add(15);
     return {
       user: {
         id: user.id,
@@ -98,6 +101,34 @@ export class EffectiveAccessService {
       statuses,
       levels: [...levels].sort((a, b) => a - b),
     };
+  }
+
+  private async resolveGradeFromEav(nrp: string): Promise<number | null> {
+    const employee = await this.prisma.entity.findUnique({ where: { code: 'KARYAWAN' } });
+    const position = await this.prisma.entity.findUnique({ where: { code: 'JABATAN' } });
+    if (!employee || !position) return null;
+    const [employeeFields, positionFields] = await Promise.all([
+      this.prisma.field.findMany({ where: { entityId: employee.id, code: { in: ['NRP', 'JABATAN'] } } }),
+      this.prisma.field.findMany({ where: { entityId: position.id, code: { in: ['JABATAN', 'GRADE'] } } }),
+    ]);
+    const employeeNrp = employeeFields.find((field) => field.code === 'NRP');
+    const employeePosition = employeeFields.find((field) => field.code === 'JABATAN');
+    const positionKey = positionFields.find((field) => field.code === 'JABATAN');
+    const positionGrade = positionFields.find((field) => field.code === 'GRADE');
+    if (!employeeNrp || !employeePosition || !positionKey || !positionGrade) return null;
+    const nrpValue = await this.prisma.value.findFirst({
+      where: { entityId: employee.id, fieldId: employeeNrp.id, recordCode: nrp, dateEnd: null },
+    });
+    const positionValue = await this.prisma.value.findFirst({
+      where: { entityId: employee.id, fieldId: employeePosition.id, recordCode: nrp, dateEnd: null },
+    });
+    const positionCode = positionValue?.value || nrpValue?.value;
+    if (!positionCode) return null;
+    const gradeValue = await this.prisma.value.findFirst({
+      where: { entityId: position.id, fieldId: positionGrade.id, recordCode: positionCode, dateEnd: null },
+    });
+    const level = Number(gradeValue?.value);
+    return Number.isInteger(level) && level >= 1 && level <= 15 ? level : null;
   }
 
   async resolveEffectiveAccess(userId: number) {
