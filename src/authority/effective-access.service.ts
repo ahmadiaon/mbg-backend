@@ -87,8 +87,6 @@ export class EffectiveAccessService {
       const grade = await this.resolveGradeFromEav(user.nrp);
       if (grade !== null) levels.add(grade);
     }
-    // Kompatibilitas data lama sebelum GRADE/status kerja dimigrasikan.
-    if (levels.size === 0 && user.role >= 1 && user.role <= 15) levels.add(user.role);
     return {
       user: {
         id: user.id,

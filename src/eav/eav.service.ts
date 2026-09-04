@@ -395,7 +395,29 @@ export class EavService {
     if (Object.keys(allowed).length === 0) {
       throw new ConflictException('Tidak ada field aktif yang dapat dikoreksi');
     }
-    return this.storeRecord(entityCode, { recordCode, values: allowed, recordUuid: undefined });
+    const before = await this.getActiveSnapshot(entityCode, recordCode);
+    const changed = Object.entries(allowed).filter(([fieldCode, value]) => before[fieldCode] !== value);
+    if (changed.length === 0) throw new ConflictException('Tidak ada perubahan nilai aktif');
+    const saved = await this.storeRecord(entityCode, { recordCode, values: allowed, recordUuid: undefined });
+    const definition = await this.prisma.historicalDefinition.findFirst({ where: { entityCode, active: true } });
+    if (definition) {
+      const record = await this.prisma.historicalRecord.upsert({
+        where: { definitionId_recordCode: { definitionId: definition.id, recordCode } },
+        update: {},
+        create: { definitionId: definition.id, recordCode, status: 'ACTIVE', createdBy: userId },
+      });
+      await this.prisma.historicalAuditLog.createMany({
+        data: changed.map(([fieldCode, newValue]) => ({
+          recordId: record.id,
+          action: 'CORRECTION',
+          fieldCode,
+          oldValue: before[fieldCode] ?? null,
+          newValue,
+          performedBy: userId,
+        })),
+      });
+    }
+    return saved;
   }
 
   async getRecordHistory(entityCode: string, recordCode: string) {
@@ -476,21 +498,31 @@ export class EavService {
       ?? await this.prisma.historicalDefinition.create({ data: { code: `HISTORICAL-${entityCode}`, name: `Historical ${entityCode}`, entityCode } });
     const current = await this.prisma.historicalRecord.findUnique({ where: { definitionId_recordCode: { definitionId: definition.id, recordCode } } });
     const baseVersion = current?.currentVersionId ?? null;
-    const request = await this.prisma.historicalChangeRequest.create({
-      data: {
-        definitionId: definition.id,
-        recordId: current?.id ?? (await this.prisma.historicalRecord.create({ data: { definitionId: definition.id, recordCode, status: 'DRAFT', createdBy: userId } })).id,
-        baseVersionId: baseVersion,
-        oldSnapshotJson: active,
-        newSnapshotJson: next,
-        changeTypeCode,
-        status: definition.approvalRequired ? 'WAITING_APPROVAL' : 'APPROVED',
-        submittedBy: userId,
-        fields: {
-          create: changed.map(([fieldCode, newValue]) => ({ entityCode, fieldCode, oldValue: active[fieldCode] ?? null, newValue })),
+    const request = await this.prisma.$transaction(async (tx) => {
+      const record = current ?? await tx.historicalRecord.create({
+        data: { definitionId: definition.id, recordCode, status: 'DRAFT', createdBy: userId },
+      });
+      return tx.historicalChangeRequest.create({
+        data: {
+          definitionId: definition.id,
+          recordId: record.id,
+          baseVersionId: baseVersion,
+          oldSnapshotJson: active,
+          newSnapshotJson: next,
+          changeTypeCode,
+          status: definition.approvalRequired ? 'WAITING_APPROVAL' : 'APPROVED',
+          submittedBy: userId,
+          fields: {
+            create: changed.map(([fieldCode, newValue]) => ({
+              entityCode,
+              fieldCode,
+              oldValue: active[fieldCode] ?? null,
+              newValue,
+            })),
+          },
         },
-      },
-      include: { fields: true },
+        include: { fields: true },
+      });
     });
     return { request, changeType: type };
   }
@@ -504,26 +536,32 @@ export class EavService {
     if (request.status !== 'WAITING_APPROVAL') throw new ConflictException('Pengajuan tidak menunggu approval');
     const snapshot = request.newSnapshotJson as Record<string, string>;
     const versionCount = await this.prisma.historicalVersion.count({ where: { recordId: request.recordId } });
-    const version = await this.prisma.historicalVersion.create({
-      data: {
-        recordId: request.recordId,
-        versionNumber: versionCount + 1,
-        snapshotJson: snapshot,
-        changeTypeCode: request.changeTypeCode,
-        changeType: 'HISTORICAL',
-        changeReason: request.changeTypeCode,
-        createdBy: userId,
-      },
+    const version = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.historicalVersion.create({
+        data: {
+          recordId: request.recordId,
+          versionNumber: versionCount + 1,
+          snapshotJson: snapshot,
+          changeTypeCode: request.changeTypeCode,
+          changeType: 'HISTORICAL',
+          changeReason: request.changeTypeCode,
+          createdBy: userId,
+        },
+      });
+      const entity = await tx.entity.findUnique({ where: { code: request.definition.entityCode! } });
+      if (!entity) throw new NotFoundException('Entity historical tidak ditemukan');
+      for (const [fieldCode, value] of Object.entries(snapshot)) {
+        const field = await tx.field.findFirst({ where: { entityId: entity.id, code: fieldCode } });
+        if (!field) continue;
+        const currentValue = await tx.value.findFirst({ where: { entityId: entity.id, fieldId: field.id, recordCode: request.record.recordCode, dateEnd: null } });
+        if (currentValue) await tx.value.update({ where: { id: currentValue.id }, data: { value } });
+        else await tx.value.create({ data: { entityId: entity.id, fieldId: field.id, recordCode: request.record.recordCode, value } });
+      }
+      await tx.historicalRecord.update({ where: { id: request.recordId }, data: { currentVersionId: created.id, status: 'ACTIVE' } });
+      await tx.historicalChangeRequest.update({ where: { id }, data: { status: 'APPROVED', approvedAt: new Date() } });
+      await tx.historicalAuditLog.create({ data: { recordId: request.recordId, versionId: created.id, action: 'APPROVE', reason: request.changeTypeCode, performedBy: userId } });
+      return created;
     });
-    await this.storeRecord(request.definition.entityCode!, {
-      recordCode: request.record.recordCode,
-      values: snapshot,
-    });
-    await this.prisma.$transaction([
-      this.prisma.historicalRecord.update({ where: { id: request.recordId }, data: { currentVersionId: version.id, status: 'ACTIVE' } }),
-      this.prisma.historicalChangeRequest.update({ where: { id }, data: { status: 'APPROVED', approvedAt: new Date() } }),
-      this.prisma.historicalAuditLog.create({ data: { recordId: request.recordId, versionId: version.id, action: 'APPROVE', reason: request.changeTypeCode, performedBy: userId } }),
-    ]);
     return { requestId: id, status: 'APPROVED', version };
   }
 

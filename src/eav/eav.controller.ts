@@ -105,27 +105,33 @@ export class EavController {
   }
 
   @Get('entities/:code/records/:recordCode/family')
-  family(@Param('code') code: string, @Param('recordCode') recordCode: string) {
+  async family(@Param('code') code: string, @Param('recordCode') recordCode: string, @Req() req: Request) {
+    await this.access.assertAccess((req['user'] as JwtPayload).sub, 'DATABASE', 'read');
     return this.eav.getRecordFamily(code, recordCode);
   }
 
   @Get('entities/:code/records/:recordCode/history')
-  history(@Param('code') code: string, @Param('recordCode') recordCode: string) {
+  async history(@Param('code') code: string, @Param('recordCode') recordCode: string, @Req() req: Request) {
+    await this.access.assertAccess((req['user'] as JwtPayload).sub, 'HISTORICAL-DATA', 'history');
     return this.eav.getRecordHistory(code, recordCode);
   }
 
   @Get('change-types/:tableCode')
-  changeTypes(@Param('tableCode') tableCode: string) {
+  async changeTypes(@Param('tableCode') tableCode: string, @Req() req: Request) {
+    await this.access.assertAccess((req['user'] as JwtPayload).sub, 'HISTORICAL-DATA', 'submit');
     return this.eav.getChangeTypes(tableCode);
   }
 
   @Get('entities/:code/records/:recordCode/combined/:fieldCode')
-  combined(
+  async combined(
     @Param('code') code: string,
     @Param('recordCode') recordCode: string,
     @Param('fieldCode') fieldCode: string,
+    @Req() req: Request,
   ) {
-    return this.eav.getCombinedValue(code, recordCode, fieldCode).then((value) => ({ value }));
+    return this.access.assertAccess((req['user'] as JwtPayload).sub, 'DATABASE', 'read').then(async () => ({
+      value: await this.eav.getCombinedValue(code, recordCode, fieldCode),
+    }));
   }
 
   @Post('entities/:code/records/:recordCode/correction')
@@ -212,10 +218,12 @@ export class EavController {
   @UseInterceptors(FileInterceptor('file'))
   async uploadAsset(
     @UploadedFile() file: { buffer: Buffer; originalname: string; mimetype: string },
+    @Req() req: Request,
     @Body('folder') folder?: string,
     @Body('filename') filename?: string,
   ) {
     if (!file) throw new Error('File tidak ditemukan');
+    await this.access.assertAccess((req['user'] as JwtPayload).sub, 'DATABASE', 'write');
     return this.assets.upload(file, folder || 'eav', filename);
   }
 }

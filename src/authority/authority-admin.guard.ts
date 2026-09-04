@@ -32,8 +32,6 @@ export class AuthorityAdminGuard implements CanActivate {
       select: { roleLevel: { select: { level: true } } },
     });
     const levels = new Set(statuses.map((status) => status.roleLevel.level));
-    if (levels.size === 0) levels.add(user.role);
-    if (user.nrp === 'MBLE-0422003') levels.add(15);
     if (!levels.has(14) && !levels.has(15)) {
       throw new ForbiddenException('Hanya Super User yang boleh mengatur otoritas');
     }

@@ -4,33 +4,6 @@ import * as bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 async function main() {
-  const roleDescriptions: Record<number, [string, string]> = {
-    1: ['EMPLOYEE', 'Karyawan; akses data sendiri'],
-    2: ['GROUP_LEADER', 'Group Leader; operasional berdasarkan status kerja'],
-    3: ['DIVISION_ADMIN', 'Admin Divisi; input dan pengelolaan data divisi'],
-    4: ['DIVISION_COORDINATOR', 'Koordinator Divisi; persetujuan level divisi'],
-    5: ['DEPARTMENT_ADMIN', 'Admin Departemen; input dan pengelolaan data departemen'],
-    6: ['DEPARTMENT_HEAD', 'Kepala Departemen; persetujuan level departemen'],
-    7: ['PROJECT_ADMIN', 'Admin Project; input dan pengelolaan data project'],
-    8: ['PROJECT_HEAD', 'Kepala Project; persetujuan level project'],
-    9: ['COMPANY_ADMIN', 'Admin atau staf perusahaan; input dan pengelolaan data perusahaan'],
-    10: ['COMPANY_HEAD', 'Kepala Perusahaan; persetujuan level perusahaan'],
-    11: ['HEAD_OFFICE_STAFF', 'Staf HO; akses lintas perusahaan sesuai policy'],
-    12: ['GENERAL_MANAGER', 'Kepala atau General Manager; otoritas lintas perusahaan'],
-    13: ['OWNER', 'Owner; melihat data bisnis tanpa mengubah data'],
-    14: ['SUPER_USER', 'Super User; mengelola konfigurasi dan role 1 sampai 14'],
-    15: ['PRIMARY_SUPER_USER', 'Super User Utama; otoritas sistem tertinggi'],
-  };
-
-  for (const [levelText, [code, description]] of Object.entries(roleDescriptions)) {
-    const level = Number(levelText);
-    await prisma.roleLevel.upsert({
-      where: { level },
-      update: { code, name: code.replaceAll('_', ' '), description, active: true },
-      create: { level, code, name: code.replaceAll('_', ' '), description },
-    });
-  }
-
   // 1. User auth (NRP + NIK saat login pertama)
   const nik = '3273012345678901';
   const password = await bcrypt.hash(nik, 10);
@@ -56,6 +29,71 @@ async function main() {
     where: { nrp: 'MBLE-0422003' },
     data: { role: 15 },
   });
+
+  // GRADE adalah sumber kebenaran level otoritas dan dapat diedit dari Database/Data.
+  const gradeEntity = await prisma.entity.upsert({
+    where: { code: 'GRADE' },
+    update: { name: 'Grade', primaryCode: 'GRADE', active: true },
+    create: { code: 'GRADE', name: 'Grade', menu: 'DATABASE', primaryCode: 'GRADE' },
+  });
+  const gradeField = await prisma.field.upsert({
+    where: { entityId_code: { entityId: gradeEntity.id, code: 'GRADE' } },
+    update: { name: 'Grade', type: 'TEXT', sort: 1 },
+    create: { entityId: gradeEntity.id, code: 'GRADE', name: 'Grade', fullCode: 'GRADE-GRADE', type: 'TEXT', sort: 1 },
+  });
+  const gradeDescriptionField = await prisma.field.upsert({
+    where: { entityId_code: { entityId: gradeEntity.id, code: 'DESKRIPSI-LEVEL-GRADE' } },
+    update: { name: 'Deskripsi Level Grade', type: 'TEXT', sort: 2 },
+    create: { entityId: gradeEntity.id, code: 'DESKRIPSI-LEVEL-GRADE', name: 'Deskripsi Level Grade', fullCode: 'GRADE-DESKRIPSI-LEVEL-GRADE', type: 'TEXT', sort: 2 },
+  });
+  const initialGrades: Array<[string, string]> = [
+    ['1', 'Karyawan'], ['2', 'Group Leader'], ['3', 'Admin Divisi'], ['4', 'Koordinator Divisi'],
+    ['5', 'Admin Departemen'], ['6', 'Kepala Departemen'], ['7', 'Admin Project'], ['8', 'Kepala Project'],
+    ['9', 'Admin/Staf Perusahaan'], ['10', 'Kepala Perusahaan'], ['11', 'Staf HO'],
+    ['12', 'Kepala/General Manager'], ['13', 'Owner'], ['14', 'Super User'], ['15', 'Super User Utama'],
+  ];
+  for (const [gradeCode, description] of initialGrades) {
+    for (const [fieldId, value] of [[gradeField.id, gradeCode], [gradeDescriptionField.id, description]] as const) {
+      const existing = await prisma.value.findFirst({ where: { entityId: gradeEntity.id, fieldId, recordCode: gradeCode, dateEnd: null } });
+      if (existing) await prisma.value.update({ where: { id: existing.id }, data: { value } });
+      else await prisma.value.create({ data: { entityId: gradeEntity.id, fieldId, recordCode: gradeCode, recordUuid: `grade-${gradeCode}`, value } });
+    }
+  }
+
+  const gradeValues = await prisma.value.findMany({
+    where: { entityId: gradeEntity.id, fieldId: gradeField.id, dateEnd: null },
+  });
+  for (const grade of gradeValues) {
+    const level = Number(grade.value ?? grade.recordCode);
+    if (!Number.isInteger(level) || level < 1 || level > 15) continue;
+    const description = (await prisma.value.findFirst({
+      where: { entityId: gradeEntity.id, fieldId: gradeDescriptionField.id, recordCode: grade.recordCode, dateEnd: null },
+    }))?.value;
+    await prisma.roleLevel.upsert({
+      where: { level },
+      update: { code: grade.recordCode, name: description || grade.value || grade.recordCode, description: description || null, active: true },
+      create: { level, code: grade.recordCode, name: description || grade.value || grade.recordCode, description: description || null },
+    });
+  }
+
+  const primarySuperUser = await prisma.roleLevel.findUnique({ where: { level: 15 } });
+  if (primarySuperUser) {
+    const existingOwnerStatus = await prisma.employmentStatus.findFirst({
+      where: { userId: user.id, roleLevelId: primarySuperUser.id, statusCode: 'ACTIVE' },
+    });
+    if (!existingOwnerStatus) {
+      await prisma.employmentStatus.create({
+        data: {
+          userId: user.id,
+          employeeNrp: user.nrp,
+          roleLevelId: primarySuperUser.id,
+          statusCode: 'ACTIVE',
+          startDate: new Date('2026-01-01T00:00:00.000Z'),
+          isPrimary: true,
+        },
+      });
+    }
+  }
 
   // Feature dasar yang dapat dipakai sebagai seed policy berikutnya.
   const features = [
