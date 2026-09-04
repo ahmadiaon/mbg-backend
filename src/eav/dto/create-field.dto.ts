@@ -15,6 +15,10 @@ export class GabunganFieldDto {
 
   @IsOptional()
   @IsString()
+  tableShowCode?: string;
+
+  @IsOptional()
+  @IsString()
   splitBy?: string;
 
   @IsOptional()

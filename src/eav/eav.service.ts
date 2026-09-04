@@ -202,6 +202,7 @@ export class EavService {
         data: {
           entityCode,
           fieldCode,
+          tableShowCode: g.tableShowCode ?? entityCode,
           fieldShowCode: g.fieldShowCode,
           splitBy: g.splitBy ?? '',
           sort: g.sort ?? 0,
@@ -302,6 +303,218 @@ export class EavService {
       where: { entityId: entity.id, recordCode },
     });
     return { message: `Record '${recordCode}' dihapus` };
+  }
+
+  async getRecordFamily(entityCode: string, recordCode: string) {
+    const root = await this.getEntityByCode(entityCode);
+    const entities: { id: number; code: string; name: string; parentId: number | null }[] = [];
+    const visit = async (entity: typeof root) => {
+      entities.push({ id: entity.id, code: entity.code, name: entity.name, parentId: entity.parentId });
+      const children = await this.prisma.entity.findMany({ where: { parentId: entity.id }, orderBy: { code: 'asc' } });
+      for (const child of children) await visit(child as typeof root);
+    };
+    await visit(root);
+
+    const ids = entities.map((entity) => entity.id);
+    const values = await this.prisma.value.findMany({
+      where: { entityId: { in: ids }, recordCode, dateEnd: null },
+      include: { field: true },
+      orderBy: [{ entityId: 'asc' }, { field: { sort: 'asc' } }],
+    });
+    const byEntity: Record<string, { recordCode: string; recordUuid: string | null; values: Record<string, string | null> }> = {};
+    for (const entity of entities) {
+      byEntity[entity.code] = { recordCode, recordUuid: null, values: {} };
+    }
+    for (const value of values) {
+      const entity = entities.find((item) => item.id === value.entityId);
+      if (!entity) continue;
+      byEntity[entity.code].recordUuid = value.recordUuid;
+      byEntity[entity.code].values[value.field.code] = value.value;
+    }
+    return {
+      root: { entityCode: root.code, recordCode },
+      entities,
+      records: byEntity,
+      historyAvailable: true,
+    };
+  }
+
+  async correctRecord(entityCode: string, recordCode: string, values: Record<string, string>, userId: number) {
+    const entity = await this.getEntityByCode(entityCode);
+    const fields = await this.prisma.field.findMany({ where: { entityId: entity.id } });
+    const fieldByCode = new Map(fields.map((field) => [field.code, field]));
+    const allowed: Record<string, string> = {};
+    for (const [fieldCode, value] of Object.entries(values)) {
+      const field = fieldByCode.get(fieldCode);
+      if (!field || field.type.toUpperCase() === 'HIDDEN' || field.code === entity.primaryCode) continue;
+      allowed[fieldCode] = value;
+    }
+    if (Object.keys(allowed).length === 0) {
+      throw new ConflictException('Tidak ada field aktif yang dapat dikoreksi');
+    }
+    return this.storeRecord(entityCode, { recordCode, values: allowed, recordUuid: undefined });
+  }
+
+  async getRecordHistory(entityCode: string, recordCode: string) {
+    const definitions = await this.prisma.historicalDefinition.findMany({
+      where: { entityCode, active: true },
+      include: { records: { where: { recordCode }, include: { versions: { orderBy: { versionNumber: 'asc' } }, auditLogs: { orderBy: { createdAt: 'asc' } } } } },
+    });
+    return definitions.flatMap((definition) => definition.records.map((record) => ({
+      definition: { code: definition.code, name: definition.name },
+      ...record,
+    })));
+  }
+
+  async getChangeTypes(tableCode: string) {
+    const records = await this.getRecords('PERUBAHAN-STATUS');
+    return records
+      .filter((record: any) => record.values.TABEL === tableCode)
+      .map((record: any) => ({
+        code: record.values.KODE || record.recordCode,
+        table: record.values.TABEL,
+        type: record.values['JENIS-PERUBAHAN'] || '',
+        description: record.values.DESKRIPSI || '',
+      }));
+  }
+
+  async getCombinedValue(entityCode: string, recordCode: string, fieldCode: string) {
+    const target = await this.getEntityByCode(entityCode);
+    const field = target.fields.find((item) => item.code === fieldCode);
+    if (!field || field.type.toUpperCase() !== 'GABUNGAN') return '';
+    const shows = await this.prisma.fieldShow.findMany({
+      where: { entityCode, fieldCode },
+      orderBy: { sort: 'asc' },
+    });
+    const chunks: string[] = [];
+    for (const show of shows) {
+      const sourceCode = show.tableShowCode || entityCode;
+      const sourceEntity = await this.getEntityByCode(sourceCode);
+      let sourceRecordCode = recordCode;
+      if (sourceCode !== entityCode) {
+        const parentField = sourceEntity.fields.find((item) => item.type.toUpperCase() === 'HIDDEN');
+        if (parentField) {
+          const linked = await this.prisma.value.findFirst({
+            where: { entityId: sourceEntity.id, fieldId: parentField.id, value: recordCode, dateEnd: null },
+          });
+          if (!linked) continue;
+          sourceRecordCode = linked.recordCode;
+        }
+      }
+      const sourceField = sourceEntity.fields.find((item) => item.code === show.fieldShowCode);
+      if (!sourceField) continue;
+      const value = await this.prisma.value.findFirst({
+        where: { entityId: sourceEntity.id, fieldId: sourceField.id, recordCode: sourceRecordCode, dateEnd: null },
+      });
+      if (value?.value) chunks.push(value.value);
+    }
+    return chunks.map((value, index) => `${index ? shows[index - 1]?.splitBy || '' : ''}${value}`).join('');
+  }
+
+  async createHistoricalChange(
+    entityCode: string,
+    recordCode: string,
+    changeTypeCode: string,
+    values: Record<string, string>,
+    userId: number,
+  ) {
+    const entity = await this.getEntityByCode(entityCode);
+    const type = await this.findChangeType(entityCode, changeTypeCode);
+    if (!type) throw new NotFoundException(`Jenis perubahan '${changeTypeCode}' tidak sesuai tabel '${entityCode}'`);
+    const active = await this.getActiveSnapshot(entityCode, recordCode);
+    const next = { ...active, ...values };
+    const changed = Object.entries(next).filter(([code, value]) => active[code] !== value);
+    if (changed.length === 0) throw new ConflictException('Tidak ada perubahan data');
+    if (entity.primaryCode && values[entity.primaryCode] && values[entity.primaryCode] !== recordCode) {
+      throw new ConflictException('Primary key tidak boleh diubah');
+    }
+
+    const definition = await this.prisma.historicalDefinition.findFirst({ where: { entityCode, active: true } })
+      ?? await this.prisma.historicalDefinition.create({ data: { code: `HISTORICAL-${entityCode}`, name: `Historical ${entityCode}`, entityCode } });
+    const current = await this.prisma.historicalRecord.findUnique({ where: { definitionId_recordCode: { definitionId: definition.id, recordCode } } });
+    const baseVersion = current?.currentVersionId ?? null;
+    const request = await this.prisma.historicalChangeRequest.create({
+      data: {
+        definitionId: definition.id,
+        recordId: current?.id ?? (await this.prisma.historicalRecord.create({ data: { definitionId: definition.id, recordCode, status: 'DRAFT', createdBy: userId } })).id,
+        baseVersionId: baseVersion,
+        oldSnapshotJson: active,
+        newSnapshotJson: next,
+        changeTypeCode,
+        status: definition.approvalRequired ? 'WAITING_APPROVAL' : 'APPROVED',
+        submittedBy: userId,
+        fields: {
+          create: changed.map(([fieldCode, newValue]) => ({ entityCode, fieldCode, oldValue: active[fieldCode] ?? null, newValue })),
+        },
+      },
+      include: { fields: true },
+    });
+    return { request, changeType: type };
+  }
+
+  async approveHistoricalChange(id: number, userId: number) {
+    const request = await this.prisma.historicalChangeRequest.findUnique({
+      where: { id },
+      include: { definition: true, record: true },
+    });
+    if (!request) throw new NotFoundException('Pengajuan historical tidak ditemukan');
+    if (request.status !== 'WAITING_APPROVAL') throw new ConflictException('Pengajuan tidak menunggu approval');
+    const snapshot = request.newSnapshotJson as Record<string, string>;
+    const versionCount = await this.prisma.historicalVersion.count({ where: { recordId: request.recordId } });
+    const version = await this.prisma.historicalVersion.create({
+      data: {
+        recordId: request.recordId,
+        versionNumber: versionCount + 1,
+        snapshotJson: snapshot,
+        changeTypeCode: request.changeTypeCode,
+        changeType: 'HISTORICAL',
+        changeReason: request.changeTypeCode,
+        createdBy: userId,
+      },
+    });
+    await this.storeRecord(request.definition.entityCode!, {
+      recordCode: request.record.recordCode,
+      values: snapshot,
+    });
+    await this.prisma.$transaction([
+      this.prisma.historicalRecord.update({ where: { id: request.recordId }, data: { currentVersionId: version.id, status: 'ACTIVE' } }),
+      this.prisma.historicalChangeRequest.update({ where: { id }, data: { status: 'APPROVED', approvedAt: new Date() } }),
+      this.prisma.historicalAuditLog.create({ data: { recordId: request.recordId, versionId: version.id, action: 'APPROVE', reason: request.changeTypeCode, performedBy: userId } }),
+    ]);
+    return { requestId: id, status: 'APPROVED', version };
+  }
+
+  async rejectHistoricalChange(id: number, userId: number) {
+    const request = await this.prisma.historicalChangeRequest.findUnique({ where: { id } });
+    if (!request) throw new NotFoundException('Pengajuan historical tidak ditemukan');
+    if (request.status !== 'WAITING_APPROVAL') throw new ConflictException('Pengajuan tidak menunggu approval');
+    await this.prisma.$transaction([
+      this.prisma.historicalChangeRequest.update({ where: { id }, data: { status: 'REJECTED' } }),
+      this.prisma.historicalAuditLog.create({ data: { recordId: request.recordId, action: 'REJECT', reason: request.changeTypeCode, performedBy: userId } }),
+    ]);
+    return { requestId: id, status: 'REJECTED' };
+  }
+
+  private async getActiveSnapshot(entityCode: string, recordCode: string): Promise<Record<string, string>> {
+    const records = await this.getRecords(entityCode);
+    const record = records.find((item: any) => item.recordCode === recordCode);
+    if (!record) throw new NotFoundException(`Record '${recordCode}' tidak ditemukan`);
+    return record.values as Record<string, string>;
+  }
+
+  private async findChangeType(tableCode: string, changeTypeCode: string) {
+    const typeEntity = await this.prisma.entity.findUnique({ where: { code: 'PERUBAHAN-STATUS' } });
+    if (!typeEntity) return null;
+    const fields = await this.prisma.field.findMany({ where: { entityId: typeEntity.id, code: { in: ['TABEL', 'KODE', 'JENIS-PERUBAHAN', 'DESKRIPSI'] } } });
+    const byCode = new Map(fields.map((field) => [field.code, field.id]));
+    const values = await this.prisma.value.findMany({ where: { entityId: typeEntity.id, recordCode: changeTypeCode, dateEnd: null } });
+    const result: Record<string, string | null> = {};
+    for (const value of values) {
+      const field = fields.find((item) => item.id === value.fieldId);
+      if (field) result[field.code] = value.value;
+    }
+    if (result.TABEL !== tableCode || result.KODE !== changeTypeCode) return null;
+    return { code: changeTypeCode, table: result.TABEL, type: result['JENIS-PERUBAHAN'], description: result.DESKRIPSI, fieldIds: [...byCode.keys()] };
   }
 
   // ===================== IMPORT / EXPORT (XLSX — format lama) =====================

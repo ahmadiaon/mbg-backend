@@ -112,9 +112,13 @@ model FieldShow {
   id            Int     @id @default(autoincrement())
   entityCode    String
   fieldCode     String
+  tableShowCode String?
   fieldShowCode String
   splitBy       String? // pemisah (spasi, "-", dll)
   sort          Int     @default(0)
+
+  @@index([entityCode, fieldCode, sort])
+  @@index([tableShowCode, fieldShowCode])
 }
 
 // Template tampilan per-user (dulu user_templates)
@@ -344,19 +348,23 @@ model UserFeatureAccess {
 // =====================================================================
 
 model HistoricalDefinition {
-  id               Int      @id @default(autoincrement())
-  code             String   @unique
-  name             String
-  entityCode       String?
-  historyEnabled   Boolean  @default(true)
-  approvalRequired Boolean  @default(true)
-  workflowId       Int?
-  active           Boolean  @default(true)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                   Int      @id @default(autoincrement())
+  code                 String   @unique
+  name                 String
+  entityCode           String?
+  changeTypeEntityCode String?
+  changeTypeTableField String?
+  changeTypeCodeField  String?
+  historyEnabled       Boolean  @default(true)
+  approvalRequired     Boolean  @default(true)
+  workflowId           Int?
+  active               Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  workflow ApprovalWorkflow?  @relation(fields: [workflowId], references: [id], onDelete: SetNull)
-  records  HistoricalRecord[]
+  workflow                ApprovalWorkflow?         @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  records                 HistoricalRecord[]
+  HistoricalChangeRequest HistoricalChangeRequest[]
 
   @@index([active])
 }
@@ -371,28 +379,69 @@ model HistoricalRecord {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  definition HistoricalDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
-  versions   HistoricalVersion[]
-  auditLogs  HistoricalAuditLog[]
-  approvals  ApprovalInstance[]
+  definition     HistoricalDefinition      @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  versions       HistoricalVersion[]
+  auditLogs      HistoricalAuditLog[]
+  approvals      ApprovalInstance[]
+  changeRequests HistoricalChangeRequest[]
 
   @@unique([definitionId, recordCode])
   @@index([status, definitionId])
 }
 
 model HistoricalVersion {
-  id            Int      @id @default(autoincrement())
-  recordId      Int
-  versionNumber Int
-  snapshotJson  Json
-  changeReason  String?
-  createdBy     Int
-  createdAt     DateTime @default(now())
+  id             Int      @id @default(autoincrement())
+  recordId       Int
+  versionNumber  Int
+  snapshotJson   Json
+  changeReason   String?
+  changeTypeCode String?
+  changeType     String?
+  createdBy      Int
+  createdAt      DateTime @default(now())
 
-  record HistoricalRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  record       HistoricalRecord          @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  basedChanges HistoricalChangeRequest[]
 
   @@unique([recordId, versionNumber])
   @@index([recordId, createdAt])
+}
+
+model HistoricalChangeRequest {
+  id              Int       @id @default(autoincrement())
+  definitionId    Int
+  recordId        Int
+  baseVersionId   Int?
+  oldSnapshotJson Json
+  newSnapshotJson Json
+  changeTypeCode  String
+  status          String    @default("DRAFT")
+  submittedBy     Int
+  submittedAt     DateTime  @default(now())
+  approvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  definition  HistoricalDefinition    @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  record      HistoricalRecord        @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  baseVersion HistoricalVersion?      @relation(fields: [baseVersionId], references: [id], onDelete: SetNull)
+  fields      HistoricalChangeField[]
+
+  @@index([definitionId, status])
+  @@index([recordId, createdAt])
+}
+
+model HistoricalChangeField {
+  id              Int    @id @default(autoincrement())
+  changeRequestId Int
+  entityCode      String
+  fieldCode       String
+  oldValue        Json?
+  newValue        Json?
+
+  changeRequest HistoricalChangeRequest @relation(fields: [changeRequestId], references: [id], onDelete: Cascade)
+
+  @@index([changeRequestId])
 }
 
 model HistoricalAuditLog {

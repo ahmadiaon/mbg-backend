@@ -69,6 +69,14 @@ Response:
 ### GET `/auth/me` (JWT)
 Info user dari token.
 
+### POST `/auth/external-login`
+Login aplikasi lain menggunakan NRP + PIN. Response mengembalikan `accessToken`,
+identitas user, status kerja aktif, role level, feature, action permission, dan
+scope data efektif.
+
+Dokumentasi lengkap + contoh cURL, JavaScript, Node.js, dan upload Assets API:
+[API-EXTERNAL-LOGIN.md](./API-EXTERNAL-LOGIN.md).
+
 ## EAV
 
 ### GET `/eav/builder` (JWT)

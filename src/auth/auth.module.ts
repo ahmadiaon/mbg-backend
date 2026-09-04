@@ -4,6 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { AuthorityModule } from '../authority/authority.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { JwtAuthGuard } from './jwt-auth.guard';
         },
       }),
     }),
+    AuthorityModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtAuthGuard],

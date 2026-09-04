@@ -8,6 +8,7 @@ import { EavModule } from './eav/eav.module';
 import { PayslipModule } from './payslip/payslip.module';
 import { DocsModule } from './docs/docs.module';
 import { AuthorityModule } from './authority/authority.module';
+import { AssetsModule } from './assets/assets.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { AuthorityModule } from './authority/authority.module';
     PayslipModule,
     DocsModule,
     AuthorityModule,
+    AssetsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

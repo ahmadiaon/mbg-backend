@@ -5,6 +5,7 @@ import { LoginDto } from './dto/login.dto';
 import { CheckNrpDto } from './dto/check-nrp.dto';
 import { SetPinDto } from './dto/set-pin.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { ExternalLoginDto } from './dto/external-login.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -18,6 +19,11 @@ export class AuthController {
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  @Post('external-login')
+  externalLogin(@Body() dto: ExternalLoginDto) {
+    return this.authService.externalLogin(dto);
   }
 
   @Get('validation/:token')

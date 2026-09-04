@@ -230,6 +230,42 @@ async function main() {
     },
   });
 
+  // Master jenis perubahan tetap EAV agar dapat dikelola dari Database/Data.
+  const changeEntity = await prisma.entity.upsert({
+    where: { code: 'PERUBAHAN-STATUS' },
+    update: { primaryCode: 'KODE', active: true },
+    create: { code: 'PERUBAHAN-STATUS', name: 'Perubahan Status', menu: 'DATABASE', primaryCode: 'KODE' },
+  });
+  const changeFields = [
+    ['TABEL', 'Tabel', 'TEXT', 1],
+    ['JENIS-PERUBAHAN', 'Jenis Perubahan', 'TEXT', 2],
+    ['DESKRIPSI', 'Deskripsi', 'TEXT', 3],
+    ['KODE', 'Kode', 'TEXT', 4],
+  ] as const;
+  const changeFieldIds = new Map<string, number>();
+  for (const [code, name, type, sort] of changeFields) {
+    const field = await prisma.field.upsert({
+      where: { entityId_code: { entityId: changeEntity.id, code } },
+      update: { name, type, sort },
+      create: { entityId: changeEntity.id, code, name, fullCode: `PERUBAHAN-STATUS-${code}`, type, sort },
+    });
+    changeFieldIds.set(code, field.id);
+  }
+  const changeTypes = [
+    ['KARYAWAN-MUTASI', 'KARYAWAN', 'MUTASI', 'Perpindahan karyawan'],
+    ['KARYAWAN-PROMOSI', 'KARYAWAN', 'PROMOSI', 'Perubahan jabatan ke level lebih tinggi'],
+    ['KARYAWAN-PERPANJANGAN', 'KARYAWAN', 'PERPANJANGAN', 'Perpanjangan masa kerja'],
+    ['UNIT-MUTASI', 'UNIT', 'MUTASI', 'Perpindahan unit'],
+    ['UNIT-PENGGANTIAN', 'UNIT', 'PENGGANTIAN', 'Penggantian unit'],
+  ] as const;
+  for (const [code, table, type, description] of changeTypes) {
+    for (const [fieldCode, value] of [['TABEL', table], ['JENIS-PERUBAHAN', type], ['DESKRIPSI', description], ['KODE', code]] as const) {
+      const existing = await prisma.value.findFirst({ where: { entityId: changeEntity.id, fieldId: changeFieldIds.get(fieldCode), recordCode: code, dateEnd: null } });
+      if (existing) await prisma.value.update({ where: { id: existing.id }, data: { value } });
+      else await prisma.value.create({ data: { entityId: changeEntity.id, fieldId: changeFieldIds.get(fieldCode)!, recordCode: code, recordUuid: `change-${code}`, value } });
+    }
+  }
+
   // 3. Data karyawan (EAV) — satu record = recordCode 'MBLE-0422003'
   const existingNrp = await prisma.value.findFirst({
     where: { entityId: entity.id, fieldId: fieldNrp.id, recordCode: 'MBLE-0422003' },

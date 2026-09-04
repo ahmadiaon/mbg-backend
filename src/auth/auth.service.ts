@@ -9,12 +9,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { SetPinDto } from './dto/set-pin.dto';
 import { JwtPayload } from './jwt-auth.guard';
+import { ExternalLoginDto } from './dto/external-login.dto';
+import { EffectiveAccessService } from '../authority/effective-access.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
+    private readonly accessService: EffectiveAccessService,
   ) {}
 
   async login(dto: LoginDto) {
@@ -76,6 +79,27 @@ export class AuthService {
       name: user.name,
       validationToken,
       waNumber: process.env.WA_ADMIN_NUMBER ?? '6281255897044',
+    };
+  }
+
+  async externalLogin(dto: ExternalLoginDto) {
+    const user = await this.prisma.user.findUnique({ where: { nrp: dto.nrp } });
+    if (!user || !user.active || !user.pin || !(await bcrypt.compare(dto.pin, user.pin))) {
+      throw new UnauthorizedException('NRP atau PIN salah');
+    }
+    const access = await this.accessService.resolveEffectiveAccess(user.id);
+    const token = await this.jwtService.signAsync({ sub: user.id, nrp: user.nrp, role: user.role, audience: 'external' });
+    return {
+      status: 'success',
+      accessToken: token,
+      tokenType: 'Bearer',
+      expiresIn: process.env.JWT_EXPIRES_IN ?? '7d',
+      user: access.user,
+      authority: {
+        roleLevels: access.roleLevels,
+        statuses: access.statuses,
+        features: access.features,
+      },
     };
   }
 
