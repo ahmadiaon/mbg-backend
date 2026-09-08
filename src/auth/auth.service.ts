@@ -1,7 +1,4 @@
-import {
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { createHash } from 'crypto';
@@ -84,17 +81,31 @@ export class AuthService {
 
   async externalLogin(dto: ExternalLoginDto) {
     const user = await this.prisma.user.findUnique({ where: { nrp: dto.nrp } });
-    if (!user || !user.active || !user.pin || !(await bcrypt.compare(dto.pin, user.pin))) {
+    if (
+      !user ||
+      !user.active ||
+      !user.pin ||
+      !(await bcrypt.compare(dto.pin, user.pin))
+    ) {
       throw new UnauthorizedException('NRP atau PIN salah');
     }
     const access = await this.accessService.resolveEffectiveAccess(user.id);
-    const token = await this.jwtService.signAsync({ sub: user.id, nrp: user.nrp, role: user.role, audience: 'external' });
+    const token = await this.jwtService.signAsync({
+      sub: user.id,
+      nrp: user.nrp,
+      audience: 'external',
+    });
     return {
       status: 'success',
       accessToken: token,
       tokenType: 'Bearer',
       expiresIn: process.env.JWT_EXPIRES_IN ?? '7d',
-      user: access.user,
+      user: {
+        id: access.user.id,
+        nrp: access.user.nrp,
+        name: access.user.name,
+        email: access.user.email,
+      },
       authority: {
         roleLevels: access.roleLevels,
         statuses: access.statuses,

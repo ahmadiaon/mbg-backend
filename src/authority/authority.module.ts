@@ -6,7 +6,11 @@ import { AuthorityAdminGuard } from './authority-admin.guard';
 
 @Module({
   controllers: [AuthorityController],
-  providers: [EffectiveAccessService, AuthorityAdminService, AuthorityAdminGuard],
+  providers: [
+    EffectiveAccessService,
+    AuthorityAdminService,
+    AuthorityAdminGuard,
+  ],
   exports: [EffectiveAccessService, AuthorityAdminService, AuthorityAdminGuard],
 })
 export class AuthorityModule {}

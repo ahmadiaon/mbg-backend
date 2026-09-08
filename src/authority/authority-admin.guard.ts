@@ -14,29 +14,33 @@ export class AuthorityAdminGuard implements CanActivate {
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest();
     const payload = request.user as { sub?: number } | undefined;
-    if (!payload?.sub) throw new UnauthorizedException('Identitas user tidak ditemukan');
+    if (!payload?.sub)
+      throw new UnauthorizedException('Identitas user tidak ditemukan');
 
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, nrp: true, role: true, active: true },
+      select: { id: true, nrp: true, active: true },
     });
     if (!user?.active) throw new UnauthorizedException('Akun tidak aktif');
     const today = new Date();
     const statuses = await this.prisma.employmentStatus.findMany({
       where: {
         userId: user.id,
-        statusCode: 'ACTIVE',
         startDate: { lte: today },
         OR: [{ endDate: null }, { endDate: { gte: today } }],
       },
-      select: { roleLevel: { select: { level: true } } },
+      select: { roleLevel: { select: { level: true } }, statusCode: true },
     });
-    const levels = new Set(statuses.map((status) => status.roleLevel.level));
+    const activeStatuses = statuses.filter((status) =>
+      ['ACTIVE', 'AKTIF'].includes(status.statusCode.toUpperCase()),
+    );
+    const levels = new Set(
+      activeStatuses.map((status) => status.roleLevel.level),
+    );
     if (!levels.has(14) && !levels.has(15)) {
-      throw new ForbiddenException('Hanya Super User yang boleh mengatur otoritas');
-    }
-    if (levels.has(15) && user.nrp !== 'MBLE-0422003') {
-      throw new ForbiddenException('Pemilik Super User Utama tidak valid');
+      throw new ForbiddenException(
+        'Hanya Super User yang boleh mengatur otoritas',
+      );
     }
 
     request.authorityUser = { ...user, roleLevels: [...levels] };

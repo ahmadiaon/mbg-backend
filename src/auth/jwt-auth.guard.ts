@@ -10,7 +10,7 @@ import { Request } from 'express';
 export interface JwtPayload {
   sub: number;
   nrp: string;
-  role: number;
+  role?: number;
 }
 
 @Injectable()
@@ -32,7 +32,9 @@ export class JwtAuthGuard implements CanActivate {
       request['user'] = await this.jwtService.verifyAsync<JwtPayload>(token);
       return true;
     } catch {
-      throw new UnauthorizedException('Token tidak valid atau sudah kedaluwarsa');
+      throw new UnauthorizedException(
+        'Token tidak valid atau sudah kedaluwarsa',
+      );
     }
   }
 }

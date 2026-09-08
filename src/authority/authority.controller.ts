@@ -1,7 +1,20 @@
-import { Body, Controller, Get, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard, JwtPayload } from '../auth/jwt-auth.guard';
-import { ACCESS_ACTIONS, AccessAction, EffectiveAccessService } from './effective-access.service';
+import {
+  ACCESS_ACTIONS,
+  AccessAction,
+  EffectiveAccessService,
+} from './effective-access.service';
 import { AuthorityAdminGuard } from './authority-admin.guard';
 import { AuthorityAdminService } from './authority-admin.service';
 
@@ -36,7 +49,13 @@ export class AuthorityController {
     return {
       feature,
       action,
-      allowed: validAction && (await this.access.canPerform(user.sub, feature, action as AccessAction)),
+      allowed:
+        validAction &&
+        (await this.access.canPerform(
+          user.sub,
+          feature,
+          action as AccessAction,
+        )),
     };
   }
 
@@ -72,7 +91,10 @@ export class AuthorityController {
 
   @Put('admin/features/:code')
   @UseGuards(AuthorityAdminGuard)
-  updateFeature(@Param('code') code: string, @Body() body: Record<string, unknown>) {
+  updateFeature(
+    @Param('code') code: string,
+    @Body() body: Record<string, unknown>,
+  ) {
     return this.admin.updateFeature(code, body);
   }
 
@@ -87,5 +109,4 @@ export class AuthorityController {
   employmentStatus(@Body() body: Record<string, unknown>) {
     return this.admin.createEmploymentStatus(body);
   }
-
 }

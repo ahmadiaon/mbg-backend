@@ -20,4 +20,13 @@ export class CreateEntityDto {
   @IsOptional()
   @IsString()
   primaryCode?: string;
+
+  @IsOptional()
+  persetujuan?: Array<{
+    level: string;
+    grade?: string;
+    group?: string;
+    description?: string;
+    reference?: string;
+  }>;
 }

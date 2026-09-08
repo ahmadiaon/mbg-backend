@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, BadGatewayException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadGatewayException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -39,13 +43,17 @@ export class PayslipService {
         headers: token ? { 'X-API-Token': token } : undefined,
       });
       if (!res.ok) {
-        throw new NotFoundException('File slip tidak ditemukan di server assets');
+        throw new NotFoundException(
+          'File slip tidak ditemukan di server assets',
+        );
       }
       const buf = Buffer.from(await res.arrayBuffer());
       return buf;
     } catch (e) {
       if (e instanceof NotFoundException) throw e;
-      throw new BadGatewayException('Gagal mengambil file slip dari server assets');
+      throw new BadGatewayException(
+        'Gagal mengambil file slip dari server assets',
+      );
     }
   }
 }

@@ -5,17 +5,21 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { EffectiveAccessService } from '../authority/effective-access.service';
 import { CreateEntityDto } from './dto/create-entity.dto';
 import { UpdateEntityDto } from './dto/update-entity.dto';
 import { CreateFieldDto, GabunganFieldDto } from './dto/create-field.dto';
 import { UpdateFieldDto } from './dto/update-field.dto';
 import { StoreRecordDto } from './dto/store-record.dto';
 import * as ExcelJS from 'exceljs';
+import { SchemaCacheService } from './schema-cache.service';
 
 // slug sesuai JS toUUID (frontend): semua non-alfanumerik (kecuali &) -> '-', uppercase
 function slugify(s: unknown): string {
   if (s === null || s === undefined) return '';
-  return String(s).replace(/[^a-zA-Z0-9&]/g, '-').toUpperCase();
+  return String(s)
+    .replace(/[^a-zA-Z0-9&]/g, '-')
+    .toUpperCase();
 }
 
 // 1-based -> huruf kolom Excel (1=A, 26=Z, 27=AA)
@@ -51,7 +55,11 @@ function excelDateToYmd(value: unknown): string {
 
 @Injectable()
 export class EavService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly access: EffectiveAccessService,
+    private readonly schemaCache: SchemaCacheService,
+  ) {}
 
   // ===================== ENTITY =====================
   async getEntities() {
@@ -65,7 +73,8 @@ export class EavService {
         fields: { orderBy: { sort: 'asc' }, include: { dataSource: true } },
       },
     });
-    if (!entity) throw new NotFoundException(`Entity '${code}' tidak ditemukan`);
+    if (!entity)
+      throw new NotFoundException(`Entity '${code}' tidak ditemukan`);
     return entity;
   }
 
@@ -75,40 +84,81 @@ export class EavService {
     });
     if (exists) throw new ConflictException(`Entity '${dto.code}' sudah ada`);
 
-    return this.prisma.entity.create({
+    const entity = await this.prisma.entity.create({
       data: {
         code: dto.code,
         name: dto.name,
         menu: dto.menu,
         primaryCode: dto.primaryCode,
-        parentId: dto.parentCode ? await this.resolveEntityId(dto.parentCode) : null,
+        parentId: dto.parentCode
+          ? await this.resolveEntityId(dto.parentCode)
+          : null,
       },
     });
+
+    if (dto.persetujuan && dto.persetujuan.length) {
+      await this.prisma.databasePersetujuan.createMany({
+        data: dto.persetujuan.map((s) => ({
+          formCode: entity.code,
+          level: s.level,
+          grade: s.grade || s.group || 'NRP',
+          description: s.description || '',
+          reference: s.reference || 'NRP',
+        })),
+      });
+    }
+
+    this.schemaCache.invalidate();
+    return entity;
   }
 
   async updateEntity(code: string, dto: UpdateEntityDto) {
     await this.getEntityByCode(code);
-    return this.prisma.entity.update({
+    const updated = await this.prisma.entity.update({
       where: { code },
       data: {
         name: dto.name,
         menu: dto.menu,
         primaryCode: dto.primaryCode,
-        parentId: dto.parentCode ? await this.resolveEntityId(dto.parentCode) : undefined,
+        parentId: dto.parentCode
+          ? await this.resolveEntityId(dto.parentCode)
+          : undefined,
         active: dto.active,
       },
     });
+
+    if (dto.persetujuan !== undefined) {
+      await this.prisma.databasePersetujuan.deleteMany({
+        where: { formCode: code },
+      });
+      if (dto.persetujuan.length) {
+        await this.prisma.databasePersetujuan.createMany({
+          data: dto.persetujuan.map((s) => ({
+            formCode: code,
+            level: s.level,
+            grade: s.grade || s.group || 'NRP',
+            description: s.description || '',
+            reference: s.reference || 'NRP',
+          })),
+        });
+      }
+    }
+
+    this.schemaCache.invalidate();
+    return updated;
   }
 
   async deleteEntity(code: string) {
     await this.getEntityByCode(code);
     await this.prisma.entity.delete({ where: { code } });
+    this.schemaCache.invalidate();
     return { message: `Entity '${code}' dihapus` };
   }
 
   private async resolveEntityId(code: string): Promise<number> {
     const entity = await this.prisma.entity.findUnique({ where: { code } });
-    if (!entity) throw new NotFoundException(`Entity parent '${code}' tidak ditemukan`);
+    if (!entity)
+      throw new NotFoundException(`Entity parent '${code}' tidak ditemukan`);
     return entity.id;
   }
 
@@ -145,6 +195,7 @@ export class EavService {
     }
 
     await this.saveGabungan(entity.code, field.code, dto.gabungan);
+    this.schemaCache.invalidate();
 
     return this.prisma.field.findUnique({
       where: { id: field.id },
@@ -152,12 +203,17 @@ export class EavService {
     });
   }
 
-  async updateField(entityCode: string, fieldCode: string, dto: UpdateFieldDto) {
+  async updateField(
+    entityCode: string,
+    fieldCode: string,
+    dto: UpdateFieldDto,
+  ) {
     const entity = await this.getEntityByCode(entityCode);
     const field = await this.prisma.field.findUnique({
       where: { entityId_code: { entityId: entity.id, code: fieldCode } },
     });
-    if (!field) throw new NotFoundException(`Field '${fieldCode}' tidak ditemukan`);
+    if (!field)
+      throw new NotFoundException(`Field '${fieldCode}' tidak ditemukan`);
 
     const updated = await this.prisma.field.update({
       where: { id: field.id },
@@ -186,6 +242,7 @@ export class EavService {
     }
 
     await this.saveGabungan(entity.code, fieldCode, dto.gabungan);
+    this.schemaCache.invalidate();
 
     return updated;
   }
@@ -196,7 +253,9 @@ export class EavService {
     gabungan?: GabunganFieldDto[],
   ) {
     if (gabungan === undefined) return;
-    await this.prisma.fieldShow.deleteMany({ where: { entityCode, fieldCode } });
+    await this.prisma.fieldShow.deleteMany({
+      where: { entityCode, fieldCode },
+    });
     for (const g of gabungan) {
       await this.prisma.fieldShow.create({
         data: {
@@ -216,14 +275,16 @@ export class EavService {
     const field = await this.prisma.field.findUnique({
       where: { entityId_code: { entityId: entity.id, code: fieldCode } },
     });
-    if (!field) throw new NotFoundException(`Field '${fieldCode}' tidak ditemukan`);
+    if (!field)
+      throw new NotFoundException(`Field '${fieldCode}' tidak ditemukan`);
 
     await this.prisma.field.delete({ where: { id: field.id } });
+    this.schemaCache.invalidate();
     return { message: `Field '${fieldCode}' dihapus` };
   }
 
   // ===================== RECORD / DATA =====================
-  async getRecords(entityCode: string) {
+  async getRecords(entityCode: string, userId?: number) {
     const entity = await this.getEntityByCode(entityCode);
     const values = await this.prisma.value.findMany({
       where: { entityId: entity.id, dateEnd: null },
@@ -242,7 +303,83 @@ export class EavService {
       }
       records[v.recordCode].values[v.field.code] = v.value;
     }
-    return Object.values(records);
+    const all = Object.values(records);
+
+    if (userId === undefined) return all;
+    return this.filterRecordsByScope(entity, all, userId);
+  }
+
+  private async filterRecordsByScope(
+    entity: { fields: { code: string }[] },
+    records: any[],
+    userId: number,
+  ) {
+    const scope = await this.access.resolveScopeContext(userId);
+    if (scope.unrestricted) return records;
+
+    const fieldCodes = entity.fields.map((field) => field.code);
+    const nrpField = fieldCodes.find((code) => code === 'NRP');
+    const companyField = fieldCodes.find((code) => code === 'PERUSAHAAN');
+    const projectField = fieldCodes.find((code) => code === 'PROJECT');
+    const departmentField = fieldCodes.find((code) => code === 'DEPARTEMEN');
+    const divisionField = fieldCodes.find((code) => code === 'DIVISI');
+
+    const hasScopeField =
+      nrpField ||
+      companyField ||
+      projectField ||
+      departmentField ||
+      divisionField;
+    if (!hasScopeField) return records;
+
+    const isSelf = (record: any) =>
+      record.recordCode === scope.nrp ||
+      (nrpField && record.values[nrpField] === scope.nrp);
+
+    if (scope.scopeType === 'SELF') {
+      return records.filter(isSelf);
+    }
+
+    const dimensionField =
+      scope.scopeType === 'COMPANY'
+        ? companyField
+        : scope.scopeType === 'PROJECT'
+          ? projectField
+          : scope.scopeType === 'DEPARTMENT'
+            ? departmentField
+            : divisionField;
+
+    const codes =
+      scope.scopeType === 'COMPANY'
+        ? scope.companies
+        : scope.scopeType === 'PROJECT'
+          ? scope.projects
+          : scope.scopeType === 'DEPARTMENT'
+            ? scope.departments
+            : scope.divisions;
+
+    if (!dimensionField) {
+      const nrps = await this.access.resolveVisibleNrps(scope.scopeType, scope);
+      if (!nrps) return records.filter(isSelf);
+      return records.filter(
+        (record) =>
+          isSelf(record) || (nrpField && nrps.has(record.values[nrpField])),
+      );
+    }
+
+    return records.filter(
+      (record) =>
+        isSelf(record) ||
+        (codes as string[]).includes(record.values[dimensionField]),
+    );
+  }
+
+  async recordExists(entityCode: string, recordCode: string) {
+    const entity = await this.getEntityByCode(entityCode);
+    const existing = await this.prisma.value.findFirst({
+      where: { entityId: entity.id, recordCode, dateEnd: null },
+    });
+    return existing !== null;
   }
 
   async storeRecord(entityCode: string, dto: StoreRecordDto) {
@@ -255,7 +392,8 @@ export class EavService {
     const existingRecord = await this.prisma.value.findFirst({
       where: { entityId: entity.id, recordCode: dto.recordCode, dateEnd: null },
     });
-    const recordUuid = dto.recordUuid ?? existingRecord?.recordUuid ?? randomUUID();
+    const recordUuid =
+      dto.recordUuid ?? existingRecord?.recordUuid ?? randomUUID();
 
     const saved: Record<string, string> = {};
     for (const [fieldCode, value] of Object.entries(dto.values)) {
@@ -289,6 +427,10 @@ export class EavService {
       saved[fieldCode] = result.value;
     }
 
+    if (entityCode === 'GRADE') {
+      await this.access.syncRoleLevelsFromGrades();
+    }
+
     return {
       entityCode,
       recordCode: dto.recordCode,
@@ -309,14 +451,29 @@ export class EavService {
     const selected = await this.getEntityByCode(entityCode);
     let root = selected;
     while (root.parentId) {
-      const parent = await this.prisma.entity.findUnique({ where: { id: root.parentId } });
+      const parent = await this.prisma.entity.findUnique({
+        where: { id: root.parentId },
+      });
       if (!parent) break;
       root = parent as typeof root;
     }
-    const entities: { id: number; code: string; name: string; parentId: number | null }[] = [];
+    const entities: {
+      id: number;
+      code: string;
+      name: string;
+      parentId: number | null;
+    }[] = [];
     const visit = async (entity: typeof root) => {
-      entities.push({ id: entity.id, code: entity.code, name: entity.name, parentId: entity.parentId });
-      const children = await this.prisma.entity.findMany({ where: { parentId: entity.id }, orderBy: { code: 'asc' } });
+      entities.push({
+        id: entity.id,
+        code: entity.code,
+        name: entity.name,
+        parentId: entity.parentId,
+      });
+      const children = await this.prisma.entity.findMany({
+        where: { parentId: entity.id },
+        orderBy: { code: 'asc' },
+      });
       for (const child of children) await visit(child as typeof root);
     };
     await visit(root);
@@ -327,23 +484,45 @@ export class EavService {
       include: { field: true },
       orderBy: [{ entityId: 'asc' }, { field: { sort: 'asc' } }],
     });
-    const rootRecordCode = selected.id === root.id
-      ? recordCode
-      : values.find((value) => value.entityId === selected.id && value.recordCode === recordCode && value.field.type.toUpperCase() === 'HIDDEN')?.value || recordCode;
-    const byEntity: Record<string, Array<{ recordCode: string; recordUuid: string | null; values: Record<string, string | null>; hiddenValues: string[] }>> = {};
+    const rootRecordCode =
+      selected.id === root.id
+        ? recordCode
+        : values.find(
+            (value) =>
+              value.entityId === selected.id &&
+              value.recordCode === recordCode &&
+              value.field.type.toUpperCase() === 'HIDDEN',
+          )?.value || recordCode;
+    const byEntity: Record<
+      string,
+      Array<{
+        recordCode: string;
+        recordUuid: string | null;
+        values: Record<string, string | null>;
+        hiddenValues: string[];
+      }>
+    > = {};
     for (const entity of entities) byEntity[entity.code] = [];
 
     // Kelompokkan semua value menjadi row per entity/record terlebih dahulu.
     for (const value of values) {
       const entity = entities.find((item) => item.id === value.entityId);
       if (!entity) continue;
-      let row = byEntity[entity.code].find((item) => item.recordCode === value.recordCode);
+      let row = byEntity[entity.code].find(
+        (item) => item.recordCode === value.recordCode,
+      );
       if (!row) {
-        row = { recordCode: value.recordCode, recordUuid: value.recordUuid, values: {}, hiddenValues: [] };
+        row = {
+          recordCode: value.recordCode,
+          recordUuid: value.recordUuid,
+          values: {},
+          hiddenValues: [],
+        };
         byEntity[entity.code].push(row);
       }
       row.values[value.field.code] = value.value;
-      if (value.field.type.toUpperCase() === 'HIDDEN' && value.value) row.hiddenValues.push(value.value);
+      if (value.field.type.toUpperCase() === 'HIDDEN' && value.value)
+        row.hiddenValues.push(value.value);
     }
 
     // Root selalu menjadi titik awal. Child ditelusuri memakai field HIDDEN
@@ -361,7 +540,9 @@ export class EavService {
         const own = included.get(entity.code) ?? new Set<string>();
         const rows = byEntity[entity.code];
         for (const row of rows) {
-          const pointsToParent = row.hiddenValues.some((value) => parentCodes.has(value));
+          const pointsToParent = row.hiddenValues.some((value) =>
+            parentCodes.has(value),
+          );
           if (pointsToParent && !own.has(row.recordCode)) {
             own.add(row.recordCode);
             changed = true;
@@ -372,7 +553,9 @@ export class EavService {
     }
     for (const entity of entities) {
       const allowed = included.get(entity.code) ?? new Set<string>();
-      byEntity[entity.code] = byEntity[entity.code].filter((row) => allowed.has(row.recordCode));
+      byEntity[entity.code] = byEntity[entity.code].filter((row) =>
+        allowed.has(row.recordCode),
+      );
     }
     return {
       root: { entityCode: root.code, recordCode: rootRecordCode },
@@ -382,29 +565,57 @@ export class EavService {
     };
   }
 
-  async correctRecord(entityCode: string, recordCode: string, values: Record<string, string>, userId: number) {
+  async correctRecord(
+    entityCode: string,
+    recordCode: string,
+    values: Record<string, string>,
+    userId: number,
+  ) {
     const entity = await this.getEntityByCode(entityCode);
-    const fields = await this.prisma.field.findMany({ where: { entityId: entity.id } });
+    const fields = await this.prisma.field.findMany({
+      where: { entityId: entity.id },
+    });
     const fieldByCode = new Map(fields.map((field) => [field.code, field]));
     const allowed: Record<string, string> = {};
     for (const [fieldCode, value] of Object.entries(values)) {
       const field = fieldByCode.get(fieldCode);
-      if (!field || field.type.toUpperCase() === 'HIDDEN' || field.code === entity.primaryCode) continue;
+      if (
+        !field ||
+        field.type.toUpperCase() === 'HIDDEN' ||
+        field.code === entity.primaryCode
+      )
+        continue;
       allowed[fieldCode] = value;
     }
     if (Object.keys(allowed).length === 0) {
       throw new ConflictException('Tidak ada field aktif yang dapat dikoreksi');
     }
     const before = await this.getActiveSnapshot(entityCode, recordCode);
-    const changed = Object.entries(allowed).filter(([fieldCode, value]) => before[fieldCode] !== value);
-    if (changed.length === 0) throw new ConflictException('Tidak ada perubahan nilai aktif');
-    const saved = await this.storeRecord(entityCode, { recordCode, values: allowed, recordUuid: undefined });
-    const definition = await this.prisma.historicalDefinition.findFirst({ where: { entityCode, active: true } });
+    const changed = Object.entries(allowed).filter(
+      ([fieldCode, value]) => before[fieldCode] !== value,
+    );
+    if (changed.length === 0)
+      throw new ConflictException('Tidak ada perubahan nilai aktif');
+    const saved = await this.storeRecord(entityCode, {
+      recordCode,
+      values: allowed,
+      recordUuid: undefined,
+    });
+    const definition = await this.prisma.historicalDefinition.findFirst({
+      where: { entityCode, active: true },
+    });
     if (definition) {
       const record = await this.prisma.historicalRecord.upsert({
-        where: { definitionId_recordCode: { definitionId: definition.id, recordCode } },
+        where: {
+          definitionId_recordCode: { definitionId: definition.id, recordCode },
+        },
         update: {},
-        create: { definitionId: definition.id, recordCode, status: 'ACTIVE', createdBy: userId },
+        create: {
+          definitionId: definition.id,
+          recordCode,
+          status: 'ACTIVE',
+          createdBy: userId,
+        },
       });
       await this.prisma.historicalAuditLog.createMany({
         data: changed.map(([fieldCode, newValue]) => ({
@@ -423,12 +634,22 @@ export class EavService {
   async getRecordHistory(entityCode: string, recordCode: string) {
     const definitions = await this.prisma.historicalDefinition.findMany({
       where: { entityCode, active: true },
-      include: { records: { where: { recordCode }, include: { versions: { orderBy: { versionNumber: 'asc' } }, auditLogs: { orderBy: { createdAt: 'asc' } } } } },
+      include: {
+        records: {
+          where: { recordCode },
+          include: {
+            versions: { orderBy: { versionNumber: 'asc' } },
+            auditLogs: { orderBy: { createdAt: 'asc' } },
+          },
+        },
+      },
     });
-    return definitions.flatMap((definition) => definition.records.map((record) => ({
-      definition: { code: definition.code, name: definition.name },
-      ...record,
-    })));
+    return definitions.flatMap((definition) =>
+      definition.records.map((record) => ({
+        definition: { code: definition.code, name: definition.name },
+        ...record,
+      })),
+    );
   }
 
   async getChangeTypes(tableCode: string) {
@@ -443,7 +664,11 @@ export class EavService {
       }));
   }
 
-  async getCombinedValue(entityCode: string, recordCode: string, fieldCode: string) {
+  async getCombinedValue(
+    entityCode: string,
+    recordCode: string,
+    fieldCode: string,
+  ) {
     const target = await this.getEntityByCode(entityCode);
     const field = target.fields.find((item) => item.code === fieldCode);
     if (!field || field.type.toUpperCase() !== 'GABUNGAN') return '';
@@ -457,23 +682,43 @@ export class EavService {
       const sourceEntity = await this.getEntityByCode(sourceCode);
       let sourceRecordCode = recordCode;
       if (sourceCode !== entityCode) {
-        const parentField = sourceEntity.fields.find((item) => item.type.toUpperCase() === 'HIDDEN');
+        const parentField = sourceEntity.fields.find(
+          (item) => item.type.toUpperCase() === 'HIDDEN',
+        );
         if (parentField) {
           const linked = await this.prisma.value.findFirst({
-            where: { entityId: sourceEntity.id, fieldId: parentField.id, value: recordCode, dateEnd: null },
+            where: {
+              entityId: sourceEntity.id,
+              fieldId: parentField.id,
+              value: recordCode,
+              dateEnd: null,
+            },
           });
           if (!linked) continue;
           sourceRecordCode = linked.recordCode;
         }
       }
-      const sourceField = sourceEntity.fields.find((item) => item.code === show.fieldShowCode);
+      const sourceField = sourceEntity.fields.find(
+        (item) => item.code === show.fieldShowCode,
+      );
       if (!sourceField) continue;
       const value = await this.prisma.value.findFirst({
-        where: { entityId: sourceEntity.id, fieldId: sourceField.id, recordCode: sourceRecordCode, dateEnd: null },
+        where: {
+          entityId: sourceEntity.id,
+          fieldId: sourceField.id,
+          recordCode: sourceRecordCode,
+          dateEnd: null,
+        },
       });
-      if (value?.value) chunks.push({ value: value.value, separator: show.splitBy || '' });
+      if (value?.value)
+        chunks.push({ value: value.value, separator: show.splitBy || '' });
     }
-    return chunks.map((chunk, index) => `${index ? chunks[index - 1].separator : ''}${chunk.value}`).join('');
+    return chunks
+      .map(
+        (chunk, index) =>
+          `${index ? chunks[index - 1].separator : ''}${chunk.value}`,
+      )
+      .join('');
   }
 
   async createHistoricalChange(
@@ -485,23 +730,53 @@ export class EavService {
   ) {
     const entity = await this.getEntityByCode(entityCode);
     const type = await this.findChangeType(entityCode, changeTypeCode);
-    if (!type) throw new NotFoundException(`Jenis perubahan '${changeTypeCode}' tidak sesuai tabel '${entityCode}'`);
+    if (!type)
+      throw new NotFoundException(
+        `Jenis perubahan '${changeTypeCode}' tidak sesuai tabel '${entityCode}'`,
+      );
     const active = await this.getActiveSnapshot(entityCode, recordCode);
     const next = { ...active, ...values };
-    const changed = Object.entries(next).filter(([code, value]) => active[code] !== value);
-    if (changed.length === 0) throw new ConflictException('Tidak ada perubahan data');
-    if (entity.primaryCode && values[entity.primaryCode] && values[entity.primaryCode] !== recordCode) {
+    const changed = Object.entries(next).filter(
+      ([code, value]) => active[code] !== value,
+    );
+    if (changed.length === 0)
+      throw new ConflictException('Tidak ada perubahan data');
+    if (
+      entity.primaryCode &&
+      values[entity.primaryCode] &&
+      values[entity.primaryCode] !== recordCode
+    ) {
       throw new ConflictException('Primary key tidak boleh diubah');
     }
 
-    const definition = await this.prisma.historicalDefinition.findFirst({ where: { entityCode, active: true } })
-      ?? await this.prisma.historicalDefinition.create({ data: { code: `HISTORICAL-${entityCode}`, name: `Historical ${entityCode}`, entityCode } });
-    const current = await this.prisma.historicalRecord.findUnique({ where: { definitionId_recordCode: { definitionId: definition.id, recordCode } } });
+    const definition =
+      (await this.prisma.historicalDefinition.findFirst({
+        where: { entityCode, active: true },
+      })) ??
+      (await this.prisma.historicalDefinition.create({
+        data: {
+          code: `HISTORICAL-${entityCode}`,
+          name: `Historical ${entityCode}`,
+          entityCode,
+        },
+      }));
+    const current = await this.prisma.historicalRecord.findUnique({
+      where: {
+        definitionId_recordCode: { definitionId: definition.id, recordCode },
+      },
+    });
     const baseVersion = current?.currentVersionId ?? null;
     const request = await this.prisma.$transaction(async (tx) => {
-      const record = current ?? await tx.historicalRecord.create({
-        data: { definitionId: definition.id, recordCode, status: 'DRAFT', createdBy: userId },
-      });
+      const record =
+        current ??
+        (await tx.historicalRecord.create({
+          data: {
+            definitionId: definition.id,
+            recordCode,
+            status: 'DRAFT',
+            createdBy: userId,
+          },
+        }));
       return tx.historicalChangeRequest.create({
         data: {
           definitionId: definition.id,
@@ -532,10 +807,14 @@ export class EavService {
       where: { id },
       include: { definition: true, record: true },
     });
-    if (!request) throw new NotFoundException('Pengajuan historical tidak ditemukan');
-    if (request.status !== 'WAITING_APPROVAL') throw new ConflictException('Pengajuan tidak menunggu approval');
+    if (!request)
+      throw new NotFoundException('Pengajuan historical tidak ditemukan');
+    if (request.status !== 'WAITING_APPROVAL')
+      throw new ConflictException('Pengajuan tidak menunggu approval');
     const snapshot = request.newSnapshotJson as Record<string, string>;
-    const versionCount = await this.prisma.historicalVersion.count({ where: { recordId: request.recordId } });
+    const versionCount = await this.prisma.historicalVersion.count({
+      where: { recordId: request.recordId },
+    });
     const version = await this.prisma.$transaction(async (tx) => {
       const created = await tx.historicalVersion.create({
         data: {
@@ -548,54 +827,133 @@ export class EavService {
           createdBy: userId,
         },
       });
-      const entity = await tx.entity.findUnique({ where: { code: request.definition.entityCode! } });
-      if (!entity) throw new NotFoundException('Entity historical tidak ditemukan');
+      const entity = await tx.entity.findUnique({
+        where: { code: request.definition.entityCode! },
+      });
+      if (!entity)
+        throw new NotFoundException('Entity historical tidak ditemukan');
       for (const [fieldCode, value] of Object.entries(snapshot)) {
-        const field = await tx.field.findFirst({ where: { entityId: entity.id, code: fieldCode } });
+        const field = await tx.field.findFirst({
+          where: { entityId: entity.id, code: fieldCode },
+        });
         if (!field) continue;
-        const currentValue = await tx.value.findFirst({ where: { entityId: entity.id, fieldId: field.id, recordCode: request.record.recordCode, dateEnd: null } });
-        if (currentValue) await tx.value.update({ where: { id: currentValue.id }, data: { value } });
-        else await tx.value.create({ data: { entityId: entity.id, fieldId: field.id, recordCode: request.record.recordCode, value } });
+        const currentValue = await tx.value.findFirst({
+          where: {
+            entityId: entity.id,
+            fieldId: field.id,
+            recordCode: request.record.recordCode,
+            dateEnd: null,
+          },
+        });
+        if (currentValue)
+          await tx.value.update({
+            where: { id: currentValue.id },
+            data: { value },
+          });
+        else
+          await tx.value.create({
+            data: {
+              entityId: entity.id,
+              fieldId: field.id,
+              recordCode: request.record.recordCode,
+              value,
+            },
+          });
       }
-      await tx.historicalRecord.update({ where: { id: request.recordId }, data: { currentVersionId: created.id, status: 'ACTIVE' } });
-      await tx.historicalChangeRequest.update({ where: { id }, data: { status: 'APPROVED', approvedAt: new Date() } });
-      await tx.historicalAuditLog.create({ data: { recordId: request.recordId, versionId: created.id, action: 'APPROVE', reason: request.changeTypeCode, performedBy: userId } });
+      await tx.historicalRecord.update({
+        where: { id: request.recordId },
+        data: { currentVersionId: created.id, status: 'ACTIVE' },
+      });
+      await tx.historicalChangeRequest.update({
+        where: { id },
+        data: { status: 'APPROVED', approvedAt: new Date() },
+      });
+      await tx.historicalAuditLog.create({
+        data: {
+          recordId: request.recordId,
+          versionId: created.id,
+          action: 'APPROVE',
+          reason: request.changeTypeCode,
+          performedBy: userId,
+        },
+      });
       return created;
     });
+    if (request.definition.entityCode === 'GRADE') {
+      await this.access.syncRoleLevelsFromGrades();
+    }
     return { requestId: id, status: 'APPROVED', version };
   }
 
   async rejectHistoricalChange(id: number, userId: number) {
-    const request = await this.prisma.historicalChangeRequest.findUnique({ where: { id } });
-    if (!request) throw new NotFoundException('Pengajuan historical tidak ditemukan');
-    if (request.status !== 'WAITING_APPROVAL') throw new ConflictException('Pengajuan tidak menunggu approval');
+    const request = await this.prisma.historicalChangeRequest.findUnique({
+      where: { id },
+    });
+    if (!request)
+      throw new NotFoundException('Pengajuan historical tidak ditemukan');
+    if (request.status !== 'WAITING_APPROVAL')
+      throw new ConflictException('Pengajuan tidak menunggu approval');
     await this.prisma.$transaction([
-      this.prisma.historicalChangeRequest.update({ where: { id }, data: { status: 'REJECTED' } }),
-      this.prisma.historicalAuditLog.create({ data: { recordId: request.recordId, action: 'REJECT', reason: request.changeTypeCode, performedBy: userId } }),
+      this.prisma.historicalChangeRequest.update({
+        where: { id },
+        data: { status: 'REJECTED' },
+      }),
+      this.prisma.historicalAuditLog.create({
+        data: {
+          recordId: request.recordId,
+          action: 'REJECT',
+          reason: request.changeTypeCode,
+          performedBy: userId,
+        },
+      }),
     ]);
     return { requestId: id, status: 'REJECTED' };
   }
 
-  private async getActiveSnapshot(entityCode: string, recordCode: string): Promise<Record<string, string>> {
+  private async getActiveSnapshot(
+    entityCode: string,
+    recordCode: string,
+  ): Promise<Record<string, string>> {
     const records = await this.getRecords(entityCode);
     const record = records.find((item: any) => item.recordCode === recordCode);
-    if (!record) throw new NotFoundException(`Record '${recordCode}' tidak ditemukan`);
+    if (!record)
+      throw new NotFoundException(`Record '${recordCode}' tidak ditemukan`);
     return record.values as Record<string, string>;
   }
 
   private async findChangeType(tableCode: string, changeTypeCode: string) {
-    const typeEntity = await this.prisma.entity.findUnique({ where: { code: 'PERUBAHAN-STATUS' } });
+    const typeEntity = await this.prisma.entity.findUnique({
+      where: { code: 'PERUBAHAN-STATUS' },
+    });
     if (!typeEntity) return null;
-    const fields = await this.prisma.field.findMany({ where: { entityId: typeEntity.id, code: { in: ['TABEL', 'KODE', 'JENIS-PERUBAHAN', 'DESKRIPSI'] } } });
+    const fields = await this.prisma.field.findMany({
+      where: {
+        entityId: typeEntity.id,
+        code: { in: ['TABEL', 'KODE', 'JENIS-PERUBAHAN', 'DESKRIPSI'] },
+      },
+    });
     const byCode = new Map(fields.map((field) => [field.code, field.id]));
-    const values = await this.prisma.value.findMany({ where: { entityId: typeEntity.id, recordCode: changeTypeCode, dateEnd: null } });
+    const values = await this.prisma.value.findMany({
+      where: {
+        entityId: typeEntity.id,
+        recordCode: changeTypeCode,
+        dateEnd: null,
+      },
+    });
     const result: Record<string, string | null> = {};
     for (const value of values) {
       const field = fields.find((item) => item.id === value.fieldId);
       if (field) result[field.code] = value.value;
     }
-    if (result.TABEL !== tableCode || result.KODE !== changeTypeCode) return null;
-    return { code: changeTypeCode, table: result.TABEL, type: result['JENIS-PERUBAHAN'], description: result.DESKRIPSI, fieldIds: [...byCode.keys()] };
+    if (result.TABEL !== tableCode || result.KODE !== changeTypeCode)
+      return null;
+    return {
+      code: changeTypeCode,
+      table: result.TABEL,
+      type: result['JENIS-PERUBAHAN'],
+      description: result.DESKRIPSI,
+      fieldIds: [...byCode.keys()],
+    };
   }
 
   // ===================== IMPORT / EXPORT (XLSX — format lama) =====================
@@ -611,7 +969,8 @@ export class EavService {
         },
       },
     });
-    if (!entity) throw new NotFoundException(`Entity '${entityCode}' tidak ditemukan`);
+    if (!entity)
+      throw new NotFoundException(`Entity '${entityCode}' tidak ditemukan`);
 
     const entities = [entity, ...entity.children];
     const columns: { entityCode: string; field: any }[] = [];
@@ -692,7 +1051,8 @@ export class EavService {
     }[] = [];
     for (let c = 5; ; c++) {
       const name = ws.getRow(1).getCell(c).value;
-      if (name === null || name === undefined || String(name).trim() === '') break;
+      if (name === null || name === undefined || String(name).trim() === '')
+        break;
       const entityCode = String(ws.getRow(2).getCell(c).value ?? '').trim();
       const fieldCode = slugify(name);
       const entity = entityByCode.get(entityCode);
@@ -700,7 +1060,9 @@ export class EavService {
       columns.push({ entityCode, fieldCode, col: c, field, entity });
     }
 
-    const parentEntity = columns.map((c) => c.entity).find((e) => e && e.parentId === null);
+    const parentEntity = columns
+      .map((c) => c.entity)
+      .find((e) => e && e.parentId === null);
     const parentCode = parentEntity?.code ?? '';
     const parentPrimary = parentEntity?.primaryCode ?? '';
 
@@ -713,7 +1075,8 @@ export class EavService {
       for (const col of columns) {
         const raw = row.getCell(col.col).value;
         if (raw === null || raw === undefined) continue;
-        let value = col.field?.type === 'DATE' ? excelDateToYmd(raw) : String(raw);
+        let value =
+          col.field?.type === 'DATE' ? excelDateToYmd(raw) : String(raw);
         if (col.field?.dataSource) value = slugify(value);
         (byEntity[col.entityCode] ??= {})[col.fieldCode] = value;
       }
@@ -743,7 +1106,13 @@ export class EavService {
   // - ?table=X&record=Y      -> satu record (parent + child digabung)
   async buildSession(table?: string, record?: string) {
     if (!table) {
-      return this.buildMetadata();
+      const cached = this.schemaCache.get();
+      if (cached) {
+        return cached;
+      }
+      const meta = await this.buildMetadata();
+      this.schemaCache.set(meta);
+      return meta;
     }
 
     const entity = await this.getEntityByCode(table);
@@ -771,7 +1140,7 @@ export class EavService {
   }
 
   private async buildMetadata() {
-    const [entities, dataSources, fieldShows, userTemplates, groupForms] =
+    const [entities, dataSources, fieldShows, userTemplates, groupForms, persetujuans] =
       await Promise.all([
         this.prisma.entity.findMany({
           include: {
@@ -782,11 +1151,26 @@ export class EavService {
         this.prisma.fieldShow.findMany(),
         this.prisma.userTemplate.findMany(),
         this.prisma.groupForm.findMany(),
+        this.prisma.databasePersetujuan.findMany({
+          orderBy: [{ formCode: 'asc' }, { level: 'asc' }],
+        }),
       ]);
 
     const dataSourceMap: Record<string, any> = {};
     for (const ds of dataSources) {
       if (ds.field) dataSourceMap[ds.field.fullCode] = ds;
+    }
+
+    const persetujuanMap: Record<string, Record<string, any>> = {};
+    for (const p of persetujuans) {
+      if (!p.formCode || !p.level) continue;
+      if (!persetujuanMap[p.formCode]) persetujuanMap[p.formCode] = {};
+      persetujuanMap[p.formCode][p.level] = {
+        level: p.level,
+        grade: p.grade,
+        description: p.description,
+        reference: p.reference,
+      };
     }
 
     const entitiesMap: Record<string, any> = {};
@@ -829,6 +1213,7 @@ export class EavService {
       fieldShows,
       userTemplates,
       groupForms,
+      persetujuan: persetujuanMap,
     };
   }
 

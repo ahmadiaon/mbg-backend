@@ -55,8 +55,7 @@ async function main() {
   for (const [gradeCode, description] of initialGrades) {
     for (const [fieldId, value] of [[gradeField.id, gradeCode], [gradeDescriptionField.id, description]] as const) {
       const existing = await prisma.value.findFirst({ where: { entityId: gradeEntity.id, fieldId, recordCode: gradeCode, dateEnd: null } });
-      if (existing) await prisma.value.update({ where: { id: existing.id }, data: { value } });
-      else await prisma.value.create({ data: { entityId: gradeEntity.id, fieldId, recordCode: gradeCode, recordUuid: `grade-${gradeCode}`, value } });
+      if (!existing) await prisma.value.create({ data: { entityId: gradeEntity.id, fieldId, recordCode: gradeCode, recordUuid: `grade-${gradeCode}`, value } });
     }
   }
 

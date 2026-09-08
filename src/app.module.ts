@@ -9,17 +9,22 @@ import { PayslipModule } from './payslip/payslip.module';
 import { DocsModule } from './docs/docs.module';
 import { AuthorityModule } from './authority/authority.module';
 import { AssetsModule } from './assets/assets.module';
+import { ApprovalModule } from './approval/approval.module';
+
+import { SchemaCacheModule } from './eav/schema-cache.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
+    SchemaCacheModule,
     AuthModule,
     EavModule,
     PayslipModule,
     DocsModule,
     AuthorityModule,
     AssetsModule,
+    ApprovalModule,
   ],
   controllers: [AppController],
   providers: [AppService],

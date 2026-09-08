@@ -13,7 +13,11 @@ interface DocItem {
 
 // Dokumen di luar folder docs/ (didaftar manual)
 const MANUAL_DOCS: { name: string; title: string; path: string }[] = [
-  { name: 'README', title: 'README (Backend)', path: join(BACKEND_DIR, 'README.md') },
+  {
+    name: 'README',
+    title: 'README (Backend)',
+    path: join(BACKEND_DIR, 'README.md'),
+  },
   { name: 'FRONTEND', title: 'README (Frontend)', path: FRONTEND_README },
 ];
 
@@ -42,7 +46,11 @@ export class DocsController {
   }
 
   @Get(':name')
-  get(@Param('name') name: string): { success: boolean; name: string; content: string } {
+  get(@Param('name') name: string): {
+    success: boolean;
+    name: string;
+    content: string;
+  } {
     const safe = name.replace(/[^a-zA-Z0-9_-]/g, '');
     const manual = MANUAL_DOCS.find((d) => d.name === safe);
     const filePath = manual ? manual.path : join(DOCS_DIR, `${safe}.md`);

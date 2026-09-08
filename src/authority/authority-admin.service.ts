@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -31,7 +30,12 @@ export class AuthorityAdminService {
 
   listFeatures() {
     return this.prisma.featureDefinition.findMany({
-      include: { policies: { include: { roleLevel: true }, orderBy: { roleLevelId: 'asc' } } },
+      include: {
+        policies: {
+          include: { roleLevel: true },
+          orderBy: { roleLevelId: 'asc' },
+        },
+      },
       orderBy: [{ sort: 'asc' }, { code: 'asc' }],
     });
   }
@@ -39,10 +43,13 @@ export class AuthorityAdminService {
   async createFeature(body: Record<string, unknown>) {
     const rawCode = this.optionalString(body.code);
     const name = this.optionalString(body.name);
-    if (!rawCode || !name) throw new BadRequestException('code dan name feature wajib diisi');
+    if (!rawCode || !name)
+      throw new BadRequestException('code dan name feature wajib diisi');
     const code = rawCode.replace(/[^a-zA-Z0-9&_-]/g, '-').toUpperCase();
     if (!code) throw new BadRequestException('code feature tidak valid');
-    const exists = await this.prisma.featureDefinition.findUnique({ where: { code } });
+    const exists = await this.prisma.featureDefinition.findUnique({
+      where: { code },
+    });
     if (exists) throw new ConflictException(`Feature '${code}' sudah ada`);
     return this.prisma.featureDefinition.create({
       data: {
@@ -61,7 +68,14 @@ export class AuthorityAdminService {
   listUsers() {
     return this.prisma.user.findMany({
       where: { active: true },
-      select: { id: true, nrp: true, name: true, email: true, role: true, active: true },
+      select: {
+        id: true,
+        nrp: true,
+        name: true,
+        email: true,
+        role: true,
+        active: true,
+      },
       orderBy: { nrp: 'asc' },
     });
   }
@@ -82,8 +96,11 @@ export class AuthorityAdminService {
   }
 
   async updateFeature(code: string, body: Record<string, unknown>) {
-    const feature = await this.prisma.featureDefinition.findUnique({ where: { code } });
-    if (!feature) throw new NotFoundException(`Feature '${code}' tidak ditemukan`);
+    const feature = await this.prisma.featureDefinition.findUnique({
+      where: { code },
+    });
+    if (!feature)
+      throw new NotFoundException(`Feature '${code}' tidak ditemukan`);
     return this.prisma.featureDefinition.update({
       where: { id: feature.id },
       data: {
@@ -99,12 +116,19 @@ export class AuthorityAdminService {
   }
 
   async upsertPolicy(featureCode: string, body: Record<string, unknown>) {
-    const feature = await this.prisma.featureDefinition.findUnique({ where: { code: featureCode } });
-    if (!feature) throw new NotFoundException(`Feature '${featureCode}' tidak ditemukan`);
+    const feature = await this.prisma.featureDefinition.findUnique({
+      where: { code: featureCode },
+    });
+    if (!feature)
+      throw new NotFoundException(`Feature '${featureCode}' tidak ditemukan`);
     const roleLevel = this.number(body.roleLevel, 'roleLevel');
-    if (roleLevel < 1 || roleLevel > 15) throw new BadRequestException('roleLevel harus 1 sampai 15');
-    const role = await this.prisma.roleLevel.findUnique({ where: { level: roleLevel } });
-    if (!role) throw new NotFoundException(`Role level '${roleLevel}' tidak ditemukan`);
+    if (roleLevel < 1 || roleLevel > 15)
+      throw new BadRequestException('roleLevel harus 1 sampai 15');
+    const role = await this.prisma.roleLevel.findUnique({
+      where: { level: roleLevel },
+    });
+    if (!role)
+      throw new NotFoundException(`Role level '${roleLevel}' tidak ditemukan`);
     const status = this.optionalString(body.employmentStatusCode) ?? 'ACTIVE';
     const data = Object.fromEntries(
       ACTION_KEYS.map((key) => [key, this.optionalBoolean(body[key]) ?? false]),
@@ -117,15 +141,37 @@ export class AuthorityAdminService {
           employmentStatusCode: status,
         },
       },
-      update: { ...data, scopeType: this.optionalString(body.scopeType) ?? 'SELF', active: this.optionalBoolean(body.active) ?? true },
-      create: { featureId: feature.id, roleLevelId: role.id, employmentStatusCode: status, ...data, scopeType: this.optionalString(body.scopeType) ?? 'SELF' },
+      update: {
+        ...data,
+        scopeType: this.optionalString(body.scopeType) ?? 'SELF',
+        active: this.optionalBoolean(body.active) ?? true,
+      },
+      create: {
+        featureId: feature.id,
+        roleLevelId: role.id,
+        employmentStatusCode: status,
+        ...data,
+        scopeType: this.optionalString(body.scopeType) ?? 'SELF',
+      },
     });
   }
 
   async createEmploymentStatus(body: Record<string, unknown>) {
     const userId = this.number(body.userId, 'userId');
-    const roleLevel = this.number(body.roleLevel, 'roleLevel');
-    if (roleLevel < 1 || roleLevel > 15) throw new BadRequestException('roleLevel harus 1 sampai 15');
+    const positionCode = this.optionalString(body.positionCode);
+    const requestedRole =
+      body.roleLevel === undefined
+        ? undefined
+        : this.number(body.roleLevel, 'roleLevel');
+    const roleLevel = positionCode
+      ? await this.resolveRoleLevelFromPosition(positionCode)
+      : requestedRole;
+    if (roleLevel === undefined)
+      throw new BadRequestException(
+        'positionCode wajib untuk menghitung grade jabatan',
+      );
+    if (roleLevel < 1 || roleLevel > 15)
+      throw new BadRequestException('roleLevel harus 1 sampai 15');
     const [user, role] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: userId } }),
       this.prisma.roleLevel.findUnique({ where: { level: roleLevel } }),
@@ -134,13 +180,20 @@ export class AuthorityAdminService {
     if (!role) throw new NotFoundException('Role level tidak ditemukan');
     const startDate = this.date(body.startDate, 'startDate');
     const endDate = body.endDate ? this.date(body.endDate, 'endDate') : null;
-    if (endDate && endDate < startDate) throw new BadRequestException('endDate tidak boleh sebelum startDate');
-    if (roleLevel === 15 && user.nrp !== 'MBLE-0422003') {
-      throw new ForbiddenException('Role 15 hanya untuk MBLE-0422003');
-    }
+    if (endDate && endDate < startDate)
+      throw new BadRequestException('endDate tidak boleh sebelum startDate');
     if (roleLevel === 15) {
-      const exists = await this.prisma.employmentStatus.count({ where: { roleLevel: { level: 15 }, statusCode: 'ACTIVE' } });
-      if (exists > 0) throw new ConflictException('Role 15 hanya boleh dimiliki satu status aktif');
+      const exists = await this.prisma.employmentStatus.count({
+        where: {
+          roleLevel: { level: 15 },
+          statusCode: 'ACTIVE',
+          NOT: { userId },
+        },
+      });
+      if (exists > 0)
+        throw new ConflictException(
+          'Role 15 hanya boleh dimiliki satu status aktif',
+        );
     }
     return this.prisma.employmentStatus.create({
       data: {
@@ -160,15 +213,41 @@ export class AuthorityAdminService {
     });
   }
 
+  private async resolveRoleLevelFromPosition(positionCode: string) {
+    const entity = await this.prisma.entity.findUnique({
+      where: { code: 'JABATAN' },
+    });
+    if (!entity) throw new NotFoundException('Entity JABATAN tidak ditemukan');
+    const gradeField = await this.prisma.field.findFirst({
+      where: { entityId: entity.id, code: 'GRADE' },
+    });
+    if (!gradeField)
+      throw new NotFoundException('Field JABATAN.GRADE tidak ditemukan');
+    const value = await this.prisma.value.findFirst({
+      where: {
+        entityId: entity.id,
+        fieldId: gradeField.id,
+        recordCode: positionCode,
+        dateEnd: null,
+      },
+    });
+    const level = Number(value?.value);
+    if (!Number.isInteger(level) || level < 1 || level > 15)
+      throw new BadRequestException('Jabatan belum memiliki GRADE valid');
+    return level;
+  }
+
   private number(value: unknown, name: string) {
     const n = Number(value);
-    if (!Number.isInteger(n)) throw new BadRequestException(`${name} harus berupa angka bulat`);
+    if (!Number.isInteger(n))
+      throw new BadRequestException(`${name} harus berupa angka bulat`);
     return n;
   }
 
   private date(value: unknown, name: string) {
     const date = new Date(String(value));
-    if (Number.isNaN(date.getTime())) throw new BadRequestException(`${name} tidak valid`);
+    if (Number.isNaN(date.getTime()))
+      throw new BadRequestException(`${name} tidak valid`);
     return date;
   }
 

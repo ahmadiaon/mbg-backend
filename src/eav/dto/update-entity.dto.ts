@@ -20,4 +20,13 @@ export class UpdateEntityDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  @IsOptional()
+  persetujuan?: Array<{
+    level: string;
+    grade?: string;
+    group?: string;
+    description?: string;
+    reference?: string;
+  }>;
 }

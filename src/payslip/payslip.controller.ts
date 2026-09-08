@@ -47,10 +47,7 @@ export class PayslipController {
     const pdf = await this.payslip.fetchPdf(slip.fileUrl);
     const filename = `SLIP-${slip.year}-${String(slip.month).padStart(2, '0')}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${filename}"`,
-    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Length', pdf.length);
     res.send(pdf);
   }

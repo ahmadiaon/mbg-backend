@@ -37,10 +37,7 @@ export class EavController {
   ) {}
 
   @Get('builder')
-  builder(
-    @Query('table') table?: string,
-    @Query('record') record?: string,
-  ) {
+  builder(@Query('table') table?: string, @Query('record') record?: string) {
     return this.eav.buildSession(table, record);
   }
 
@@ -101,24 +98,47 @@ export class EavController {
   async records(@Param('code') code: string, @Req() req: Request) {
     const user = req['user'] as JwtPayload;
     await this.access.assertAccess(user.sub, 'DATABASE', 'read');
-    return this.eav.getRecords(code);
+    return this.eav.getRecords(code, user.sub);
   }
 
   @Get('entities/:code/records/:recordCode/family')
-  async family(@Param('code') code: string, @Param('recordCode') recordCode: string, @Req() req: Request) {
-    await this.access.assertAccess((req['user'] as JwtPayload).sub, 'DATABASE', 'read');
+  async family(
+    @Param('code') code: string,
+    @Param('recordCode') recordCode: string,
+    @Req() req: Request,
+  ) {
+    await this.access.assertAccess(
+      (req['user'] as JwtPayload).sub,
+      'DATABASE',
+      'read',
+    );
     return this.eav.getRecordFamily(code, recordCode);
   }
 
   @Get('entities/:code/records/:recordCode/history')
-  async history(@Param('code') code: string, @Param('recordCode') recordCode: string, @Req() req: Request) {
-    await this.access.assertAccess((req['user'] as JwtPayload).sub, 'HISTORICAL-DATA', 'history');
+  async history(
+    @Param('code') code: string,
+    @Param('recordCode') recordCode: string,
+    @Req() req: Request,
+  ) {
+    await this.access.assertAccess(
+      (req['user'] as JwtPayload).sub,
+      'HISTORICAL-DATA',
+      'history',
+    );
     return this.eav.getRecordHistory(code, recordCode);
   }
 
   @Get('change-types/:tableCode')
-  async changeTypes(@Param('tableCode') tableCode: string, @Req() req: Request) {
-    await this.access.assertAccess((req['user'] as JwtPayload).sub, 'HISTORICAL-DATA', 'submit');
+  async changeTypes(
+    @Param('tableCode') tableCode: string,
+    @Req() req: Request,
+  ) {
+    await this.access.assertAccess(
+      (req['user'] as JwtPayload).sub,
+      'HISTORICAL-DATA',
+      'submit',
+    );
     return this.eav.getChangeTypes(tableCode);
   }
 
@@ -129,17 +149,26 @@ export class EavController {
     @Param('fieldCode') fieldCode: string,
     @Req() req: Request,
   ) {
-    return this.access.assertAccess((req['user'] as JwtPayload).sub, 'DATABASE', 'read').then(async () => ({
-      value: await this.eav.getCombinedValue(code, recordCode, fieldCode),
-    }));
+    return this.access
+      .assertAccess((req['user'] as JwtPayload).sub, 'DATABASE', 'read')
+      .then(async () => ({
+        value: await this.eav.getCombinedValue(code, recordCode, fieldCode),
+      }));
   }
 
   @Post('entities/:code/records/:recordCode/correction')
-  correction(@Param('code') code: string, @Param('recordCode') recordCode: string, @Body('values') values: Record<string, string>, @Req() req: Request) {
+  correction(
+    @Param('code') code: string,
+    @Param('recordCode') recordCode: string,
+    @Body('values') values: Record<string, string>,
+    @Req() req: Request,
+  ) {
     const user = req['user'] as JwtPayload;
-    return this.access.assertAccess(user.sub, 'HISTORICAL-DATA', 'edit').then(() =>
-      this.eav.correctRecord(code, recordCode, values || {}, user.sub),
-    );
+    return this.access
+      .assertAccess(user.sub, 'HISTORICAL-DATA', 'edit')
+      .then(() =>
+        this.eav.correctRecord(code, recordCode, values || {}, user.sub),
+      );
   }
 
   @Post('entities/:code/records/:recordCode/historical-update')
@@ -150,31 +179,48 @@ export class EavController {
     @Req() req: Request,
   ) {
     const user = req['user'] as JwtPayload;
-    return this.access.assertAccess(user.sub, 'HISTORICAL-DATA', 'submit').then(() =>
-      this.eav.createHistoricalChange(code, recordCode, body.changeTypeCode, body.values || {}, user.sub),
-    );
+    return this.access
+      .assertAccess(user.sub, 'HISTORICAL-DATA', 'submit')
+      .then(() =>
+        this.eav.createHistoricalChange(
+          code,
+          recordCode,
+          body.changeTypeCode,
+          body.values || {},
+          user.sub,
+        ),
+      );
   }
 
   @Post('historical-changes/:id/approve')
   approveHistorical(@Param('id') id: string, @Req() req: Request) {
     const user = req['user'] as JwtPayload;
-    return this.access.assertAccess(user.sub, 'HISTORICAL-DATA', 'approve').then(() =>
-      this.eav.approveHistoricalChange(Number(id), user.sub),
-    );
+    return this.access
+      .assertAccess(user.sub, 'HISTORICAL-DATA', 'approve')
+      .then(() => this.eav.approveHistoricalChange(Number(id), user.sub));
   }
 
   @Post('historical-changes/:id/reject')
   rejectHistorical(@Param('id') id: string, @Req() req: Request) {
     const user = req['user'] as JwtPayload;
-    return this.access.assertAccess(user.sub, 'HISTORICAL-DATA', 'reject').then(() =>
-      this.eav.rejectHistoricalChange(Number(id), user.sub),
-    );
+    return this.access
+      .assertAccess(user.sub, 'HISTORICAL-DATA', 'reject')
+      .then(() => this.eav.rejectHistoricalChange(Number(id), user.sub));
   }
 
   @Post('entities/:code/records')
-  async storeRecord(@Param('code') code: string, @Body() dto: StoreRecordDto, @Req() req: Request) {
+  async storeRecord(
+    @Param('code') code: string,
+    @Body() dto: StoreRecordDto,
+    @Req() req: Request,
+  ) {
     const user = req['user'] as JwtPayload;
-    await this.access.assertAccess(user.sub, 'DATABASE', 'write');
+    const exists = await this.eav.recordExists(code, dto.recordCode);
+    if (exists) {
+      await this.access.assertAccess(user.sub, 'DATABASE', 'edit');
+    } else {
+      await this.access.assertAccess(user.sub, 'DATABASE', 'write');
+    }
     return this.eav.storeRecord(code, dto);
   }
 
@@ -190,7 +236,11 @@ export class EavController {
   }
 
   @Get('entities/:code/export')
-  async exportRecords(@Param('code') code: string, @Res() res: Response, @Req() req: Request) {
+  async exportRecords(
+    @Param('code') code: string,
+    @Res() res: Response,
+    @Req() req: Request,
+  ) {
     const user = req['user'] as JwtPayload;
     await this.access.assertAccess(user.sub, 'DATABASE', 'export');
     const { filename, buffer } = await this.eav.exportRecords(code);
@@ -198,16 +248,16 @@ export class EavController {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${filename}"`,
-    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);
   }
 
   @Post('import')
   @UseInterceptors(FileInterceptor('file'))
-  async importRecords(@UploadedFile() file: { buffer: Buffer }, @Req() req: Request) {
+  async importRecords(
+    @UploadedFile() file: { buffer: Buffer },
+    @Req() req: Request,
+  ) {
     if (!file) throw new Error('File tidak ditemukan');
     const user = req['user'] as JwtPayload;
     await this.access.assertAccess(user.sub, 'DATABASE', 'import');
@@ -217,13 +267,18 @@ export class EavController {
   @Post('assets/upload')
   @UseInterceptors(FileInterceptor('file'))
   async uploadAsset(
-    @UploadedFile() file: { buffer: Buffer; originalname: string; mimetype: string },
+    @UploadedFile()
+    file: { buffer: Buffer; originalname: string; mimetype: string },
     @Req() req: Request,
     @Body('folder') folder?: string,
     @Body('filename') filename?: string,
   ) {
     if (!file) throw new Error('File tidak ditemukan');
-    await this.access.assertAccess((req['user'] as JwtPayload).sub, 'DATABASE', 'write');
+    await this.access.assertAccess(
+      (req['user'] as JwtPayload).sub,
+      'DATABASE',
+      'write',
+    );
     return this.assets.upload(file, folder || 'eav', filename);
   }
 }
