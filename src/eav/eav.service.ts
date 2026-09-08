@@ -286,8 +286,19 @@ export class EavService {
   // ===================== RECORD / DATA =====================
   async getRecords(entityCode: string, userId?: number) {
     const entity = await this.getEntityByCode(entityCode);
+    const childEntities = this.prisma.entity.findMany
+      ? await this.prisma.entity.findMany({
+          where: { parentId: entity.id },
+          select: { id: true },
+        })
+      : [];
+    const entityIds = [entity.id, ...(childEntities || []).map((c) => c.id)];
+
     const values = await this.prisma.value.findMany({
-      where: { entityId: entity.id, dateEnd: null },
+      where: {
+        entityId: entityIds.length > 1 ? { in: entityIds } : entity.id,
+        dateEnd: null,
+      },
       include: { field: true },
       orderBy: { recordCode: 'asc' },
     });
