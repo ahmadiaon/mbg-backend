@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 
 const ACTION_KEYS = [
@@ -380,6 +381,369 @@ export class AuthorityAdminService {
       success: true,
       message: 'Hak akses khusus personil berhasil dicabut',
     };
+  }
+
+  async listUsersManagement() {
+    const [users, nikValues, namaValues, jabatanValues, perusahaanValues, statusValues] =
+      await Promise.all([
+        this.prisma.user.findMany({
+          select: {
+            id: true,
+            nrp: true,
+            name: true,
+            email: true,
+            role: true,
+            pin: true,
+            password: true,
+            active: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+          orderBy: { nrp: 'asc' },
+        }),
+        this.prisma.value.findMany({
+          where: {
+            field: { entity: { code: 'IDENTITAS-KARYAWAN' }, code: 'NIK-KTP' },
+          },
+          select: { recordCode: true, value: true },
+        }),
+        this.prisma.value.findMany({
+          where: {
+            field: {
+              entity: { code: 'IDENTITAS-KARYAWAN' },
+              code: 'NAMA-KARYAWAN',
+            },
+          },
+          select: { recordCode: true, value: true },
+        }),
+        this.prisma.value.findMany({
+          where: {
+            field: { entity: { code: 'STATUS-KERJA-KARYAWAN' }, code: 'JABATAN' },
+          },
+          select: { recordCode: true, value: true },
+        }),
+        this.prisma.value.findMany({
+          where: {
+            field: {
+              entity: { code: 'STATUS-KERJA-KARYAWAN' },
+              code: 'PERUSAHAAN',
+            },
+          },
+          select: { recordCode: true, value: true },
+        }),
+        this.prisma.value.findMany({
+          where: {
+            field: { entity: { code: 'STATUS-KERJA-KARYAWAN' }, code: 'STATUS' },
+          },
+          select: { recordCode: true, value: true },
+        }),
+      ]);
+
+    const norm = (s: string) =>
+      (s || '').replace(/[\/\-_]/g, '').trim().toUpperCase();
+
+    const nikMap = new Map<string, string>();
+    for (const v of nikValues) {
+      if (!v.value) continue;
+      nikMap.set(v.recordCode, v.value);
+      nikMap.set(norm(v.recordCode), v.value);
+    }
+
+    const namaMap = new Map<string, string>();
+    for (const v of namaValues) {
+      if (!v.value) continue;
+      namaMap.set(v.recordCode, v.value);
+      namaMap.set(norm(v.recordCode), v.value);
+    }
+
+    const jabatanMap = new Map<string, string>();
+    for (const v of jabatanValues) {
+      if (!v.value) continue;
+      jabatanMap.set(v.recordCode, v.value);
+      jabatanMap.set(norm(v.recordCode), v.value);
+    }
+
+    const perusahaanMap = new Map<string, string>();
+    for (const v of perusahaanValues) {
+      if (!v.value) continue;
+      perusahaanMap.set(v.recordCode, v.value);
+      perusahaanMap.set(norm(v.recordCode), v.value);
+    }
+
+    const statusMap = new Map<string, string>();
+    for (const v of statusValues) {
+      if (!v.value) continue;
+      statusMap.set(v.recordCode, v.value);
+      statusMap.set(norm(v.recordCode), v.value);
+    }
+
+    return users.map((u) => {
+      const cleanName =
+        namaMap.get(u.nrp) || namaMap.get(norm(u.nrp)) || u.name;
+      const nikKtp = nikMap.get(u.nrp) || nikMap.get(norm(u.nrp)) || null;
+      const jabatan =
+        jabatanMap.get(u.nrp) || jabatanMap.get(norm(u.nrp)) || null;
+      const perusahaan =
+        perusahaanMap.get(u.nrp) || perusahaanMap.get(norm(u.nrp)) || null;
+      const statusKerja =
+        statusMap.get(u.nrp) || statusMap.get(norm(u.nrp)) || null;
+
+      return {
+        id: u.id,
+        nrp: u.nrp,
+        name: cleanName,
+        email: u.email,
+        role: u.role,
+        active: u.active,
+        hasPin: Boolean(u.pin),
+        hasPassword: Boolean(u.password),
+        nikKtp,
+        jabatan,
+        perusahaan,
+        statusKerja,
+        createdAt: u.createdAt,
+        updatedAt: u.updatedAt,
+      };
+    });
+  }
+
+  async listUnregisteredEmployees() {
+    const norm = (s: string) =>
+      (s || '').replace(/[\/\-_]/g, '').trim().toUpperCase();
+
+    const [users, namaRecords, nikRecords, jabatanRecords, perusahaanRecords] =
+      await Promise.all([
+        this.prisma.user.findMany({ select: { nrp: true } }),
+        this.prisma.value.findMany({
+          where: {
+            field: {
+              entity: { code: 'IDENTITAS-KARYAWAN' },
+              code: 'NAMA-KARYAWAN',
+            },
+          },
+          select: { recordCode: true, value: true },
+        }),
+        this.prisma.value.findMany({
+          where: {
+            field: { entity: { code: 'IDENTITAS-KARYAWAN' }, code: 'NIK-KTP' },
+          },
+          select: { recordCode: true, value: true },
+        }),
+        this.prisma.value.findMany({
+          where: {
+            field: { entity: { code: 'STATUS-KERJA-KARYAWAN' }, code: 'JABATAN' },
+          },
+          select: { recordCode: true, value: true },
+        }),
+        this.prisma.value.findMany({
+          where: {
+            field: {
+              entity: { code: 'STATUS-KERJA-KARYAWAN' },
+              code: 'PERUSAHAAN',
+            },
+          },
+          select: { recordCode: true, value: true },
+        }),
+      ]);
+
+    const userNrpSet = new Set<string>();
+    for (const u of users) {
+      userNrpSet.add(u.nrp);
+      userNrpSet.add(norm(u.nrp));
+    }
+
+    const nikMap = new Map<string, string>();
+    for (const n of nikRecords) {
+      if (!n.value) continue;
+      nikMap.set(n.recordCode, n.value);
+      nikMap.set(norm(n.recordCode), n.value);
+    }
+
+    const jabatanMap = new Map<string, string>();
+    for (const j of jabatanRecords) {
+      if (!j.value) continue;
+      jabatanMap.set(j.recordCode, j.value);
+      jabatanMap.set(norm(j.recordCode), j.value);
+    }
+
+    const perusahaanMap = new Map<string, string>();
+    for (const p of perusahaanRecords) {
+      if (!p.value) continue;
+      perusahaanMap.set(p.recordCode, p.value);
+      perusahaanMap.set(norm(p.recordCode), p.value);
+    }
+
+    const unregistered: Array<{
+      nrp: string;
+      nama: string;
+      nikKtp: string | null;
+      jabatan: string | null;
+      perusahaan: string | null;
+    }> = [];
+
+    const seenNrp = new Set<string>();
+    for (const k of namaRecords) {
+      const nrp = k.recordCode;
+      const normalized = norm(nrp);
+      if (seenNrp.has(normalized)) continue;
+      seenNrp.add(normalized);
+
+      if (!userNrpSet.has(nrp) && !userNrpSet.has(normalized)) {
+        unregistered.push({
+          nrp,
+          nama: k.value || nrp,
+          nikKtp: nikMap.get(nrp) || nikMap.get(normalized) || null,
+          jabatan: jabatanMap.get(nrp) || jabatanMap.get(normalized) || null,
+          perusahaan:
+            perusahaanMap.get(nrp) || perusahaanMap.get(normalized) || null,
+        });
+      }
+    }
+
+    return unregistered;
+  }
+
+  async resetUserPinToKtp(userId: number, customNik?: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException(`User ID ${userId} tidak ditemukan`);
+
+    let nik = customNik?.trim();
+    if (!nik) {
+      const nikRecord = await this.prisma.value.findFirst({
+        where: {
+          field: { entity: { code: 'IDENTITAS-KARYAWAN' }, code: 'NIK-KTP' },
+          OR: [
+            { recordCode: user.nrp },
+            { recordCode: user.nrp.replace(/\//g, '-') },
+            { recordCode: user.nrp.replace(/-/g, '/') },
+          ],
+        },
+      });
+      nik = nikRecord?.value?.trim();
+    }
+
+    if (!nik) {
+      throw new BadRequestException(
+        `Nomor NIK KTP untuk karyawan ${user.nrp} tidak ditemukan di master data. Silakan masukkan nomor NIK KTP secara manual.`,
+      );
+    }
+
+    const hashedPassword = await bcrypt.hash(nik, 10);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        pin: null, // Reset PIN sehingga user login menggunakan NIK
+        password: hashedPassword, // Simpan password ter-enkripsi NIK
+        authLogin: null, // Hapus token verifikasi sementara
+      },
+    });
+
+    return {
+      success: true,
+      message: `PIN berhasil direset. Password login karyawan dikembalikan ke NIK KTP (${nik}). Karyawan dapat langsung login kembali menggunakan NIK KTP.`,
+      nikKtp: nik,
+    };
+  }
+
+  async setUserPinManual(userId: number, pin: string) {
+    const cleanPin = pin?.trim();
+    if (!cleanPin || cleanPin.length < 4 || cleanPin.length > 8) {
+      throw new BadRequestException(
+        'PIN harus terdiri dari 4 sampai 8 digit angka',
+      );
+    }
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException(`User ID ${userId} tidak ditemukan`);
+
+    const hashedPin = await bcrypt.hash(cleanPin, 10);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        pin: hashedPin,
+        authLogin: null,
+      },
+    });
+
+    return {
+      success: true,
+      message: `PIN baru berhasil disetel untuk karyawan ${user.nrp}.`,
+    };
+  }
+
+  async updateUserManagement(userId: number, body: Record<string, unknown>) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException(`User ID ${userId} tidak ditemukan`);
+
+    const data: Record<string, unknown> = {};
+    if (body.role !== undefined) data.role = this.optionalInt(body.role);
+    if (body.active !== undefined) data.active = Boolean(body.active);
+    if (typeof body.name === 'string' && body.name.trim())
+      data.name = body.name.trim();
+    if (typeof body.email === 'string') data.email = body.email.trim() || null;
+
+    return this.prisma.user.update({
+      where: { id: userId },
+      data,
+    });
+  }
+
+  async registerEmployeeUser(nrp: string, role = 1, customNik?: string) {
+    const cleanNrp = nrp.trim();
+    const existing = await this.prisma.user.findUnique({
+      where: { nrp: cleanNrp },
+    });
+    if (existing) {
+      throw new ConflictException(
+        `User dengan NRP '${cleanNrp}' sudah terdaftar`,
+      );
+    }
+
+    const [namaVal, nikVal] = await Promise.all([
+      this.prisma.value.findFirst({
+        where: {
+          field: {
+            entity: { code: 'IDENTITAS-KARYAWAN' },
+            code: 'NAMA-KARYAWAN',
+          },
+          OR: [
+            { recordCode: cleanNrp },
+            { recordCode: cleanNrp.replace(/\//g, '-') },
+            { recordCode: cleanNrp.replace(/-/g, '/') },
+          ],
+        },
+      }),
+      this.prisma.value.findFirst({
+        where: {
+          field: { entity: { code: 'IDENTITAS-KARYAWAN' }, code: 'NIK-KTP' },
+          OR: [
+            { recordCode: cleanNrp },
+            { recordCode: cleanNrp.replace(/\//g, '-') },
+            { recordCode: cleanNrp.replace(/-/g, '/') },
+          ],
+        },
+      }),
+    ]);
+
+    const nik = customNik?.trim() || nikVal?.value?.trim();
+    if (!nik) {
+      throw new BadRequestException(
+        'NIK KTP belum terisi di master data. Mohon masukkan NIK secara manual.',
+      );
+    }
+
+    const hashedPassword = await bcrypt.hash(nik, 10);
+    const name = namaVal?.value?.trim() || cleanNrp;
+
+    return this.prisma.user.create({
+      data: {
+        nrp: cleanNrp,
+        name,
+        password: hashedPassword,
+        pin: null,
+        role: role || 1,
+        active: true,
+      },
+    });
   }
 
   private number(value: unknown, name: string) {

@@ -84,6 +84,53 @@ export class AuthorityController {
     return this.admin.listUsers();
   }
 
+  @Get('admin/users/management')
+  @UseGuards(AuthorityAdminGuard)
+  usersManagement() {
+    return this.admin.listUsersManagement();
+  }
+
+  @Get('admin/users/unregistered')
+  @UseGuards(AuthorityAdminGuard)
+  unregisteredEmployees() {
+    return this.admin.listUnregisteredEmployees();
+  }
+
+  @Post('admin/users/:id/reset-pin')
+  @UseGuards(AuthorityAdminGuard)
+  resetUserPin(
+    @Param('id') id: string,
+    @Body() body: { nik?: string },
+  ) {
+    return this.admin.resetUserPinToKtp(Number(id), body?.nik);
+  }
+
+  @Post('admin/users/:id/set-pin')
+  @UseGuards(AuthorityAdminGuard)
+  setUserPin(
+    @Param('id') id: string,
+    @Body() body: { pin: string },
+  ) {
+    return this.admin.setUserPinManual(Number(id), body.pin);
+  }
+
+  @Post('admin/users/register-employee')
+  @UseGuards(AuthorityAdminGuard)
+  registerEmployee(
+    @Body() body: { nrp: string; role?: number; nik?: string },
+  ) {
+    return this.admin.registerEmployeeUser(body.nrp, body.role, body.nik);
+  }
+
+  @Put('admin/users/:id/management')
+  @UseGuards(AuthorityAdminGuard)
+  updateUserManagement(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.admin.updateUserManagement(Number(id), body);
+  }
+
   @Get('admin/employment-statuses')
   @UseGuards(AuthorityAdminGuard)
   employmentStatuses() {
