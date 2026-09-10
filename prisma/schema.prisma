@@ -181,6 +181,23 @@ model Payslip {
   @@index([year, month])
 }
 
+// Water Level Monitoring (ketinggian air sungai PT. SRI & PT. MB)
+model WaterLevel {
+  id             Int      @id @default(autoincrement())
+  tanggal        DateTime @db.Date
+  jam            String   @db.VarChar(10) // e.g. "14:20"
+  tinggi         Float
+  lokasi         String   @db.VarChar(100)
+  fotoPanorama   String?  @map("foto_panorama") @db.VarChar(255)
+  fotoDraftMeter String?  @map("foto_draft_meter") @db.VarChar(255)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("water_levels")
+  @@index([tanggal, jam])
+  @@index([lokasi])
+}
+
 // =====================================================================
 // AUTHORITY — role level, status kerja, struktur organisasi, dan feature
 // =====================================================================

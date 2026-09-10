@@ -10,6 +10,7 @@ import { DocsModule } from './docs/docs.module';
 import { AuthorityModule } from './authority/authority.module';
 import { AssetsModule } from './assets/assets.module';
 import { ApprovalModule } from './approval/approval.module';
+import { WaterLevelModule } from './water-level/water-level.module';
 
 import { SchemaCacheModule } from './eav/schema-cache.module';
 
@@ -25,6 +26,7 @@ import { SchemaCacheModule } from './eav/schema-cache.module';
     AuthorityModule,
     AssetsModule,
     ApprovalModule,
+    WaterLevelModule,
   ],
   controllers: [AppController],
   providers: [AppService],
