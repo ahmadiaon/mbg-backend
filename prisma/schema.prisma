@@ -200,6 +200,35 @@ model WaterLevel {
 }
 
 // =====================================================================
+// STRUKTUR ORGANISASI & MANAJEMEN GRADE
+// =====================================================================
+
+model OrgStructure {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique
+  title       String
+  department  String?
+  division    String?
+  company     String?  @default("ALL")
+  grade       Int      @default(1) // Role level / Grade 1..15
+  parentId    Int?
+  employeeNrp String?
+  sortOrder   Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  parent   OrgStructure?  @relation("OrgStructureTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children OrgStructure[] @relation("OrgStructureTree")
+
+  @@map("org_structures")
+  @@index([parentId])
+  @@index([department])
+  @@index([grade])
+  @@index([employeeNrp])
+}
+
+// =====================================================================
 // AUTHORITY — role level, status kerja, struktur organisasi, dan feature
 // =====================================================================
 

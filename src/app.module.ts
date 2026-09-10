@@ -11,6 +11,7 @@ import { AuthorityModule } from './authority/authority.module';
 import { AssetsModule } from './assets/assets.module';
 import { ApprovalModule } from './approval/approval.module';
 import { WaterLevelModule } from './water-level/water-level.module';
+import { OrganizationModule } from './organization/organization.module';
 
 import { SchemaCacheModule } from './eav/schema-cache.module';
 
@@ -27,6 +28,7 @@ import { SchemaCacheModule } from './eav/schema-cache.module';
     AssetsModule,
     ApprovalModule,
     WaterLevelModule,
+    OrganizationModule,
   ],
   controllers: [AppController],
   providers: [AppService],
