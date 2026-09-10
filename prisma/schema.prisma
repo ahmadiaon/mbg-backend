@@ -188,6 +188,7 @@ model WaterLevel {
   jam            String   @db.VarChar(10) // e.g. "14:20"
   tinggi         Float
   lokasi         String   @db.VarChar(100)
+  cuaca          String?  @db.VarChar(50)
   fotoPanorama   String?  @map("foto_panorama") @db.VarChar(255)
   fotoDraftMeter String?  @map("foto_draft_meter") @db.VarChar(255)
   createdAt      DateTime @default(now()) @map("created_at")

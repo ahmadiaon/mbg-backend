@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsString } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateWaterLevelDto {
@@ -18,4 +18,8 @@ export class CreateWaterLevelDto {
   @Type(() => Number)
   @IsNumber()
   tinggi: number;
+
+  @IsOptional()
+  @IsString()
+  cuaca?: string;
 }

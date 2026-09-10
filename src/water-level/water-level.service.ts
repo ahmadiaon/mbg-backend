@@ -24,6 +24,7 @@ export interface WaterLevelRecord {
   jam: string;
   tinggi: number;
   lokasi: string;
+  cuaca: string | null;
   foto_panorama: string | null;
   foto_draft_meter: string | null;
   createdAt: Date;
@@ -51,6 +52,7 @@ export class WaterLevelService {
     jam: string;
     tinggi: number;
     lokasi: string;
+    cuaca?: string | null;
     fotoPanorama: string | null;
     fotoDraftMeter: string | null;
     createdAt: Date;
@@ -62,6 +64,7 @@ export class WaterLevelService {
       jam: row.jam,
       tinggi: row.tinggi,
       lokasi: row.lokasi,
+      cuaca: row.cuaca ?? null,
       foto_panorama: row.fotoPanorama,
       foto_draft_meter: row.fotoDraftMeter,
       createdAt: row.createdAt,
@@ -229,6 +232,7 @@ export class WaterLevelService {
         jam: dto.jam,
         lokasi: dto.lokasi,
         tinggi: Number(dto.tinggi),
+        cuaca: dto.cuaca || null,
         fotoPanorama,
         fotoDraftMeter,
       },
