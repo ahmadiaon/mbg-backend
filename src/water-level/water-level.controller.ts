@@ -33,8 +33,8 @@ export class WaterLevelController {
   }
 
   @Get('summary')
-  async getSummary() {
-    const summary = await this.waterLevelService.getSummary();
+  async getSummary(@Query('lokasi') lokasi?: string) {
+    const summary = await this.waterLevelService.getSummary(lokasi);
     return {
       success: true,
       data: summary,

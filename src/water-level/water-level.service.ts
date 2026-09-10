@@ -77,13 +77,13 @@ export class WaterLevelService {
 
     const rows = await this.prisma.waterLevel.findMany({
       where: whereClause,
-      orderBy: [{ tanggal: 'desc' }, { jam: 'desc' }],
+      orderBy: [{ tanggal: 'desc' }, { jam: 'desc' }, { id: 'desc' }],
     });
 
     return rows.map((r) => this.transformRecord(r));
   }
 
-  async getSummary() {
+  async getSummary(lokasi?: string) {
     const allRecords = await this.getData();
 
     const getLatestAndYesterday = (loc: string) => {
@@ -91,16 +91,21 @@ export class WaterLevelService {
       const latest = locRecords[0] ?? null;
 
       if (!latest) {
-        return { latest: null, yesterday: null, diff: 0, text: 'Belum ada data' };
+        return { latest: null, yesterday: null, diff: 0, text: 'Belum ada data', status: 'neutral' as const };
       }
 
-      // Find yesterday date
+      // Find calendar yesterday date
       const latestDate = new Date(`${latest.tanggal}T00:00:00.000Z`);
       latestDate.setUTCDate(latestDate.getUTCDate() - 1);
       const yesterdayStr = this.formatDateStr(latestDate);
 
-      const yesterday =
+      let yesterday =
         locRecords.find((r) => r.tanggal === yesterdayStr) ?? null;
+
+      // If no measurement on exact calendar yesterday, fallback to most recent prior measurement
+      if (!yesterday) {
+        yesterday = locRecords.find((r) => r.tanggal < latest.tanggal) ?? null;
+      }
 
       let diff = 0;
       let text = 'Belum ada data kemarin';
@@ -132,12 +137,22 @@ export class WaterLevelService {
     const mb = getLatestAndYesterday('PT. MB');
     const sri = getLatestAndYesterday('PT. SRI');
 
-    // 7-day trend series
-    const today = new Date();
+    // 7-day trend series: Anchor to the latest date of selected location or overall
+    const targetRecords =
+      lokasi && lokasi !== 'ALL'
+        ? allRecords.filter((r) => r.lokasi === lokasi)
+        : allRecords;
+
+    const anchorDateStr =
+      targetRecords.length > 0
+        ? targetRecords[0].tanggal
+        : this.formatDateStr(new Date());
+
+    const anchorDate = new Date(`${anchorDateStr}T00:00:00.000Z`);
     const dates: string[] = [];
     for (let i = 6; i >= 0; i--) {
-      const d = new Date(today);
-      d.setDate(today.getDate() - i);
+      const d = new Date(anchorDate);
+      d.setUTCDate(anchorDate.getUTCDate() - i);
       dates.push(this.formatDateStr(d));
     }
 
