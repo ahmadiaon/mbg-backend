@@ -148,11 +148,175 @@ export class EavService {
     return updated;
   }
 
+  async getEntityDeletionImpact(code: string) {
+    const entity = await this.prisma.entity.findUnique({
+      where: { code },
+      include: {
+        fields: { select: { id: true, code: true, name: true } },
+        children: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            fields: { select: { id: true } },
+          },
+        },
+      },
+    });
+    if (!entity) {
+      throw new NotFoundException(`Entity '${code}' tidak ditemukan`);
+    }
+
+    // 1. Data records count (distinct recordCode where dateEnd is null)
+    const distinctRecords = await this.prisma.value.groupBy({
+      by: ['recordCode'],
+      where: { entityId: entity.id, dateEnd: null },
+    });
+    const recordCount = distinctRecords.length;
+
+    // 2. Fields count
+    const fieldCount = entity.fields.length;
+
+    // 3. Children impact
+    const childrenImpact = await Promise.all(
+      entity.children.map(async (child) => {
+        const childRecords = await this.prisma.value.groupBy({
+          by: ['recordCode'],
+          where: { entityId: child.id, dateEnd: null },
+        });
+        return {
+          code: child.code,
+          name: child.name,
+          recordCount: childRecords.length,
+          fieldCount: child.fields.length,
+        };
+      }),
+    );
+
+    // 4. Check external references (other entities pointing to this entity via DataSource)
+    const dataSources = await this.prisma.dataSource.findMany({
+      where: { entitySource: code },
+      include: {
+        field: {
+          include: {
+            entity: { select: { code: true, name: true } },
+          },
+        },
+      },
+    });
+
+    const referencedBy = dataSources
+      .filter((ds) => ds.field?.entity && ds.field.entity.code !== code)
+      .map((ds) => ({
+        entityCode: ds.field.entity.code,
+        entityName: ds.field.entity.name,
+        fieldCode: ds.field.code,
+        fieldName: ds.field.name,
+      }));
+
+    // 5. Approval configs & data
+    const [approvalConfigs, approvalDataCount] = await Promise.all([
+      this.prisma.databasePersetujuan.count({
+        where: { formCode: code },
+      }),
+      this.prisma.databaseDataPersetujuan.count({
+        where: { codeForm: code },
+      }),
+    ]);
+
+    const hasImpact =
+      recordCount > 0 ||
+      childrenImpact.length > 0 ||
+      referencedBy.length > 0 ||
+      approvalConfigs > 0 ||
+      approvalDataCount > 0;
+
+    return {
+      entityCode: entity.code,
+      entityName: entity.name,
+      recordCount,
+      fieldCount,
+      children: childrenImpact,
+      referencedBy,
+      approvalConfigs,
+      approvalDataCount,
+      hasImpact,
+    };
+  }
+
   async deleteEntity(code: string) {
-    await this.getEntityByCode(code);
-    await this.prisma.entity.delete({ where: { code } });
+    const entity = await this.prisma.entity.findUnique({
+      where: { code },
+      include: { children: { select: { id: true, code: true } } },
+    });
+    if (!entity) {
+      throw new NotFoundException(`Entity '${code}' tidak ditemukan`);
+    }
+
+    const childIds = entity.children.map((c) => c.id);
+    const childCodes = entity.children.map((c) => c.code);
+    const allEntityIds = [entity.id, ...childIds];
+    const allCodes = [code, ...childCodes];
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Delete approval data & configs
+      await tx.databaseDataPersetujuan.deleteMany({
+        where: { codeForm: { in: allCodes } },
+      });
+      await tx.databasePersetujuan.deleteMany({
+        where: { formCode: { in: allCodes } },
+      });
+
+      // 2. Delete FieldShow referencing this entity or children
+      await tx.fieldShow.deleteMany({
+        where: {
+          OR: [
+            { entityCode: { in: allCodes } },
+            { tableShowCode: { in: allCodes } },
+          ],
+        },
+      });
+
+      // 3. Clear DataSources that point to this entity/children
+      await tx.dataSource.deleteMany({
+        where: { entitySource: { in: allCodes } },
+      });
+
+      // 4. Delete Values of children and parent
+      await tx.value.deleteMany({
+        where: { entityId: { in: allEntityIds } },
+      });
+
+      // 5. Delete Fields of children and parent
+      const fields = await tx.field.findMany({
+        where: { entityId: { in: allEntityIds } },
+        select: { id: true },
+      });
+      const fieldIds = fields.map((f) => f.id);
+      if (fieldIds.length > 0) {
+        await tx.dataSource.deleteMany({
+          where: { fieldId: { in: fieldIds } },
+        });
+        await tx.field.deleteMany({
+          where: { id: { in: fieldIds } },
+        });
+      }
+
+      // 6. Delete child entities
+      if (childIds.length > 0) {
+        await tx.entity.deleteMany({
+          where: { id: { in: childIds } },
+        });
+      }
+
+      // 7. Delete parent entity
+      await tx.entity.delete({
+        where: { id: entity.id },
+      });
+    });
+
     this.schemaCache.invalidate();
-    return { message: `Entity '${code}' dihapus` };
+    return { message: `Entity '${code}' dan seluruh datanya berhasil dihapus` };
   }
 
   private async resolveEntityId(code: string): Promise<number> {

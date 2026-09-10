@@ -58,6 +58,12 @@ export class EavController {
     return this.eav.updateEntity(code, dto);
   }
 
+  @Get('entities/:code/deletion-impact')
+  @UseGuards(AuthorityAdminGuard)
+  getEntityDeletionImpact(@Param('code') code: string) {
+    return this.eav.getEntityDeletionImpact(code);
+  }
+
   @Delete('entities/:code')
   @UseGuards(AuthorityAdminGuard)
   deleteEntity(@Param('code') code: string) {
