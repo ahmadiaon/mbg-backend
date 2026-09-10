@@ -1170,36 +1170,310 @@ export class EavService {
     }
 
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('Data');
-    ws.getCell('A1').value = 'KETERANGAN DATA';
-    ws.getCell('C1').value = 'TANGGAL UPDATE';
-    ws.getCell('D1').value = 'No.';
-    ws.getCell('A2').value = 'PENGELOMPOKAN DATA';
-    ws.getCell('A4').value = 'URUTAN';
-    ws.getCell('B4').value = 'FIELD NAME';
+    const safeSheetName = (entity.name || entityCode)
+      .substring(0, 31)
+      .replace(/[:\\/?*\[\]]/g, '');
+    const ws = wb.addWorksheet(safeSheetName);
 
+    // Pre-fetch tabel referensi DARI-TABEL / REFERENCE untuk human-readable labels
+    const sourceMap = new Map<string, Array<{ recordCode: string; values: Record<string, any> }>>();
+    for (const col of columns) {
+      const src = col.field.dataSource?.entitySource;
+      if (src && !sourceMap.has(src)) {
+        try {
+          const srcRecs = await this.getRecords(src);
+          sourceMap.set(src, srcRecs);
+        } catch {
+          sourceMap.set(src, []);
+        }
+      }
+    }
+    const hasEmployeeCol = columns.some(
+      (c) =>
+        c.field.code.toUpperCase() === 'NRP' ||
+        c.field.type?.toUpperCase() === 'NRP' ||
+        c.field.dataSource?.entitySource === 'KARYAWAN',
+    );
+    if (hasEmployeeCol && !sourceMap.has('KARYAWAN')) {
+      try {
+        const empRecs = await this.getRecords('KARYAWAN');
+        sourceMap.set('KARYAWAN', empRecs);
+      } catch {
+        sourceMap.set('KARYAWAN', []);
+      }
+    }
+
+    const resolveReadable = (col: { entityCode: string; field: any }, rawVal: any): string => {
+      if (rawVal === null || rawVal === undefined || rawVal === '') return '';
+      const strVal = String(rawVal).trim();
+      const type = (col.field.type ?? '').toUpperCase();
+      const codeUpper = (col.field.code ?? '').toUpperCase();
+      const src = col.field.dataSource?.entitySource;
+      const fsrc = col.field.dataSource?.fieldSource;
+
+      // 1. Relasi DataSource
+      if (src && sourceMap.has(src)) {
+        const srcRecs = sourceMap.get(src)!;
+        const matched = srcRecs.find(
+          (r) => r.recordCode === strVal || (fsrc && r.values[fsrc] === strVal),
+        );
+        if (matched) {
+          if (src === 'KARYAWAN') {
+            const nama = matched.values['NAMA-KARYAWAN'] || matched.values['FULL-NAME'] || matched.recordCode;
+            return `${nama} (${matched.recordCode})`;
+          }
+          if (fsrc && matched.values[fsrc]) return matched.values[fsrc];
+          const nameField = Object.keys(matched.values).find((k) => k.includes('NAMA'));
+          if (nameField && matched.values[nameField]) return matched.values[nameField];
+          return matched.recordCode;
+        }
+      }
+
+      // 2. Relasi Karyawan jika field bernama NRP di tabel non-karyawan
+      if (
+        (codeUpper === 'NRP' || type === 'NRP') &&
+        col.entityCode !== 'KARYAWAN' &&
+        sourceMap.has('KARYAWAN')
+      ) {
+        const empRecs = sourceMap.get('KARYAWAN')!;
+        const matched = empRecs.find(
+          (r) => r.recordCode === strVal || r.values['NRP'] === strVal,
+        );
+        if (matched) {
+          const nama = matched.values['NAMA-KARYAWAN'] || matched.values['FULL-NAME'] || matched.recordCode;
+          return `${nama} (${matched.recordCode})`;
+        }
+      }
+
+      return strVal;
+    };
+
+    const totalCols = columns.length + 1; // +1 untuk kolom NO
+    const lastColLetter = colLetter(totalCols);
+
+    // Row 1: Banner Header Perusahaan
+    ws.mergeCells(`A1:${lastColLetter}1`);
+    const titleCell = ws.getCell('A1');
+    titleCell.value = 'PT MITRA BARITO GROUP';
+    titleCell.font = { name: 'Segoe UI', size: 14, bold: true, color: { argb: 'FF1E3A8A' } };
+    titleCell.alignment = { vertical: 'middle', horizontal: 'left' };
+    ws.getRow(1).height = 24;
+
+    // Row 2: Nama Dokumen & Form
+    ws.mergeCells(`A2:${lastColLetter}2`);
+    const subCell = ws.getCell('A2');
+    subCell.value = `LAPORAN DATA ${entity.name.toUpperCase()} (KODE: ${entity.code})`;
+    subCell.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FF334155' } };
+    subCell.alignment = { vertical: 'middle', horizontal: 'left' };
+    ws.getRow(2).height = 20;
+
+    // Row 3: Metadata Ekspor
+    ws.mergeCells(`A3:${lastColLetter}3`);
+    const metaCell = ws.getCell('A3');
+    const nowStr = new Date().toLocaleDateString('id-ID', {
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+    });
+    metaCell.value = `Tanggal Ekspor: ${nowStr} | Total Data: ${rows.size} Baris`;
+    metaCell.font = { name: 'Segoe UI', size: 9, italic: true, color: { argb: 'FF64748B' } };
+    metaCell.alignment = { vertical: 'middle', horizontal: 'left' };
+    ws.getRow(3).height = 18;
+
+    // Row 4: Baris Metadata Tersembunyi (agar 100% kompatibel dan akurat saat di-import kembali)
+    ws.getRow(4).hidden = true;
+    ws.getCell('A4').value = 'NO';
     columns.forEach((col, i) => {
-      const L = colLetter(i + 5);
-      ws.getCell(`${L}1`).value = col.field.name;
-      ws.getCell(`${L}2`).value = col.entityCode;
-      ws.getCell(`${L}4`).value = i + 1;
-      ws.getCell(`A${5 + i}`).value = i + 1;
-      ws.getCell(`B${5 + i}`).value = col.field.name;
+      ws.getCell(`${colLetter(i + 2)}4`).value = `${col.entityCode}:${col.field.code}`;
     });
 
-    let ri = 5;
+    // Row 5: Header Kolom
+    ws.getRow(5).height = 28;
+    const headerFill: ExcelJS.Fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF1E3A8A' }, // Deep Corporate Navy Blue
+    };
+    const headerFont: Partial<ExcelJS.Font> = {
+      name: 'Segoe UI',
+      size: 10,
+      bold: true,
+      color: { argb: 'FFFFFFFF' },
+    };
+    const headerBorder: Partial<ExcelJS.Borders> = {
+      top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      bottom: { style: 'medium', color: { argb: 'FF0F172A' } },
+      right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+    };
+
+    const noHeader = ws.getCell('A5');
+    noHeader.value = 'NO.';
+    noHeader.fill = headerFill;
+    noHeader.font = headerFont;
+    noHeader.alignment = { vertical: 'middle', horizontal: 'center' };
+    noHeader.border = headerBorder;
+
+    columns.forEach((col, i) => {
+      const cell = ws.getCell(`${colLetter(i + 2)}5`);
+      cell.value = col.field.name.toUpperCase();
+      cell.fill = headerFill;
+      cell.font = headerFont;
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      cell.border = headerBorder;
+    });
+
+    // Tracking lebar kolom untuk auto-fit
+    const colLengths: number[] = [6, ...columns.map((c) => Math.max((c.field.name || '').length, 10))];
+
+    // Border data rows
+    const dataBorder: Partial<ExcelJS.Borders> = {
+      top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+    };
+
+    // Tulis data baris mulai baris 6
+    let ri = 6;
     let num = 1;
     for (const [, row] of rows) {
-      ws.getCell(`D${ri}`).value = num;
+      const rowObj = ws.getRow(ri);
+      rowObj.height = 22;
+      const isAlt = num % 2 === 0;
+      const rowFill: ExcelJS.Fill = isAlt
+        ? { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }
+        : { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
+
+      // Col A: No.
+      const noCell = rowObj.getCell(1);
+      noCell.value = num;
+      noCell.alignment = { vertical: 'middle', horizontal: 'center' };
+      noCell.fill = rowFill;
+      noCell.border = dataBorder;
+      noCell.font = { name: 'Segoe UI', size: 10 };
+
       columns.forEach((col, i) => {
-        ws.getCell(`${colLetter(i + 5)}${ri}`).value =
-          row[`${col.entityCode}\u0000${col.field.code}`] ?? '';
+        const cell = rowObj.getCell(i + 2);
+        cell.fill = rowFill;
+        cell.border = dataBorder;
+        cell.font = { name: 'Segoe UI', size: 10 };
+
+        const rawVal = row[`${col.entityCode}\0${col.field.code}`];
+        const type = (col.field.type ?? '').toUpperCase();
+
+        if (type === 'NOMINAL-UANG') {
+          const clean = String(rawVal ?? '').replace(/[^0-9.-]/g, '');
+          const n = Number(clean);
+          if (clean !== '' && !Number.isNaN(n)) {
+            cell.value = n;
+            cell.numFmt = '"Rp "#,##0;("Rp "#,##0);"-"';
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+            colLengths[i + 1] = Math.max(colLengths[i + 1], 16);
+          } else {
+            cell.value = '';
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          }
+        } else if (type === 'DATE') {
+          if (rawVal) {
+            const d = new Date(rawVal);
+            if (!Number.isNaN(d.getTime())) {
+              const dd = String(d.getDate()).padStart(2, '0');
+              const mm = String(d.getMonth() + 1).padStart(2, '0');
+              const yyyy = d.getFullYear();
+              cell.value = `${dd}/${mm}/${yyyy}`;
+            } else {
+              cell.value = String(rawVal);
+            }
+          } else {
+            cell.value = '';
+          }
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          colLengths[i + 1] = Math.max(colLengths[i + 1], 12);
+        } else if (type === 'DATETIME') {
+          if (rawVal) {
+            const d = new Date(rawVal);
+            if (!Number.isNaN(d.getTime())) {
+              const dd = String(d.getDate()).padStart(2, '0');
+              const mm = String(d.getMonth() + 1).padStart(2, '0');
+              const yyyy = d.getFullYear();
+              const hh = String(d.getHours()).padStart(2, '0');
+              const min = String(d.getMinutes()).padStart(2, '0');
+              cell.value = `${dd}/${mm}/${yyyy} ${hh}:${min}`;
+            } else {
+              cell.value = String(rawVal);
+            }
+          } else {
+            cell.value = '';
+          }
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          colLengths[i + 1] = Math.max(colLengths[i + 1], 18);
+        } else {
+          // Teks / Relasi / Kode
+          const readable = resolveReadable(col, rawVal);
+          cell.value = readable;
+          cell.alignment = {
+            vertical: 'middle',
+            horizontal: col.field.code.toUpperCase() === 'NRP' ? 'center' : 'left',
+          };
+          colLengths[i + 1] = Math.max(colLengths[i + 1], String(readable).length);
+        }
       });
+
       num++;
       ri++;
     }
 
-    ws.views = [{ state: 'frozen', ySplit: 4 }];
+    // Baris Total di paling bawah jika ada kolom NOMINAL-UANG dan ada baris data
+    const hasNominal = columns.some((c) => (c.field.type ?? '').toUpperCase() === 'NOMINAL-UANG');
+    if (hasNominal && rows.size > 0) {
+      const totRow = ws.getRow(ri);
+      totRow.height = 25;
+      const totBorder: Partial<ExcelJS.Borders> = {
+        top: { style: 'thin', color: { argb: 'FF94A3B8' } },
+        bottom: { style: 'double', color: { argb: 'FF0F172A' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      };
+      const totFill: ExcelJS.Fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFF1F5F9' },
+      };
+
+      for (let c = 1; c <= totalCols; c++) {
+        const cell = totRow.getCell(c);
+        cell.fill = totFill;
+        cell.border = totBorder;
+        if (c === 1) {
+          cell.value = 'TOTAL';
+          cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        } else {
+          const colInfo = columns[c - 2];
+          if ((colInfo?.field.type ?? '').toUpperCase() === 'NOMINAL-UANG') {
+            const letter = colLetter(c);
+            cell.value = { formula: `SUM(${letter}6:${letter}${ri - 1})` };
+            cell.numFmt = '"Rp "#,##0;("Rp "#,##0);"-"';
+            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+            cell.alignment = { vertical: 'middle', horizontal: 'right' };
+          } else {
+            cell.value = '';
+          }
+        }
+      }
+    }
+
+    // Atur lebar kolom secara otomatis (Auto-fit Column Width)
+    ws.getColumn(1).width = 7;
+    columns.forEach((_, i) => {
+      const len = colLengths[i + 1] ?? 12;
+      ws.getColumn(i + 2).width = Math.min(Math.max(len + 4, 12), 45);
+    });
+
+    ws.views = [{ state: 'frozen', ySplit: 5, activeCell: 'A6', showGridLines: true }];
+    ws.autoFilter = { from: 'A5', to: `${lastColLetter}5` };
+
     const buffer = await wb.xlsx.writeBuffer();
     return { filename: `${entityCode}.xlsx`, buffer: Buffer.from(buffer) };
   }
@@ -1216,7 +1490,13 @@ export class EavService {
     });
     const entityByCode = new Map(entities.map((e) => [e.code, e]));
 
-    // kolom data mulai E (kolom 5): baris 1 = nama field, baris 2 = kode tabel
+    // Cek format file:
+    // Format baru: Baris 4 (hidden) memuat metadata "entityCode:fieldCode", data mulai baris 6 (kolom B+)
+    // Format lama: Baris 1 = nama field mulai col 5, baris 2 = kode tabel, data mulai baris 5
+    const isNewFormat =
+      String(ws.getRow(4).getCell(1).value ?? '').toUpperCase() === 'NO' ||
+      String(ws.getRow(4).getCell(2).value ?? '').includes(':');
+
     const columns: {
       entityCode: string;
       fieldCode: string;
@@ -1224,15 +1504,47 @@ export class EavService {
       field?: any;
       entity?: any;
     }[] = [];
-    for (let c = 5; ; c++) {
-      const name = ws.getRow(1).getCell(c).value;
-      if (name === null || name === undefined || String(name).trim() === '')
-        break;
-      const entityCode = String(ws.getRow(2).getCell(c).value ?? '').trim();
-      const fieldCode = slugify(name);
-      const entity = entityByCode.get(entityCode);
-      const field = entity?.fields.find((f) => f.code === fieldCode);
-      columns.push({ entityCode, fieldCode, col: c, field, entity });
+
+    let dataStartRow = 5;
+    let noCol = 4;
+
+    if (isNewFormat) {
+      dataStartRow = 6;
+      noCol = 1;
+      for (let c = 2; ; c++) {
+        const meta = String(ws.getRow(4).getCell(c).value ?? '').trim();
+        const headerName = String(ws.getRow(5).getCell(c).value ?? '').trim();
+        if (!meta && !headerName) break;
+        if (meta.includes(':')) {
+          const [entityCode, fieldCode] = meta.split(':');
+          const entity = entityByCode.get(entityCode);
+          const field = entity?.fields.find((f) => f.code === fieldCode);
+          columns.push({ entityCode, fieldCode, col: c, field, entity });
+        } else if (headerName) {
+          const fieldCode = slugify(headerName);
+          for (const ent of entities) {
+            const f = ent.fields.find((field) => field.code === fieldCode);
+            if (f) {
+              columns.push({ entityCode: ent.code, fieldCode: f.code, col: c, field: f, entity: ent });
+              break;
+            }
+          }
+        }
+      }
+    } else {
+      // Format lama
+      dataStartRow = 5;
+      noCol = 4;
+      for (let c = 5; ; c++) {
+        const name = ws.getRow(1).getCell(c).value;
+        if (name === null || name === undefined || String(name).trim() === '')
+          break;
+        const entityCode = String(ws.getRow(2).getCell(c).value ?? '').trim();
+        const fieldCode = slugify(name);
+        const entity = entityByCode.get(entityCode);
+        const field = entity?.fields.find((f) => f.code === fieldCode);
+        columns.push({ entityCode, fieldCode, col: c, field, entity });
+      }
     }
 
     const parentEntity = columns
@@ -1243,16 +1555,37 @@ export class EavService {
 
     const rows: Record<string, Record<string, string>>[] = [];
     ws.eachRow((row, rowNumber) => {
-      if (rowNumber < 5) return;
-      const no = row.getCell(4).value;
+      if (rowNumber < dataStartRow) return;
+      const no = row.getCell(noCol).value;
       if (no === null || no === undefined || String(no).trim() === '') return;
+      if (String(no).toUpperCase() === 'TOTAL') return;
+
       const byEntity: Record<string, Record<string, string>> = {};
       for (const col of columns) {
-        const raw = row.getCell(col.col).value;
-        if (raw === null || raw === undefined) continue;
-        let value =
-          col.field?.type === 'DATE' ? excelDateToYmd(raw) : String(raw);
-        if (col.field?.dataSource) value = slugify(value);
+        const rawCell = row.getCell(col.col).value;
+        if (rawCell === null || rawCell === undefined) continue;
+        const raw =
+          typeof rawCell === 'object' && rawCell !== null && 'result' in rawCell
+            ? (rawCell as any).result
+            : rawCell;
+
+        let value = '';
+        if (col.field?.type === 'DATE') {
+          value = excelDateToYmd(raw);
+        } else if (col.field?.type === 'NOMINAL-UANG') {
+          value = String(raw).replace(/[^0-9]/g, '');
+        } else {
+          value = String(raw).trim();
+          if (col.field?.dataSource) {
+            // Jika ada kode di dalam kurung, e.g. "Agus Purnomo (MBLE-062307025)", ekstrak kodenya
+            const matchInParen = value.match(/\(([^)]+)\)$/);
+            if (matchInParen) {
+              value = matchInParen[1].trim();
+            } else {
+              value = slugify(value);
+            }
+          }
+        }
         (byEntity[col.entityCode] ??= {})[col.fieldCode] = value;
       }
       rows.push(byEntity);

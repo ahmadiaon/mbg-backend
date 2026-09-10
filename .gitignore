@@ -31,3 +31,7 @@ lerna-debug.log*
 
 # Coverage
 coverage
+
+# Uploaded assets
+/assets/**/*
+!/assets/**/.gitkeep
