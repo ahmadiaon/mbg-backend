@@ -244,9 +244,17 @@ export class WaterLevelService {
     });
 
     const isSuperUser = (userRole?.role ?? 1) >= 14;
-    const canDelete =
-      isSuperUser ||
-      (await this.effectiveAccess.canPerform(userId, 'WATER-LEVEL', 'delete'));
+    const hasDelete = await this.effectiveAccess.canPerform(
+      userId,
+      'WATER-LEVEL',
+      'delete',
+    );
+    const hasWrite = await this.effectiveAccess.canPerform(
+      userId,
+      'WATER-LEVEL',
+      'write',
+    );
+    const canDelete = isSuperUser || hasDelete || hasWrite;
 
     if (!canDelete) {
       throw new ForbiddenException(
