@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
@@ -114,5 +115,37 @@ export class AuthorityController {
   @UseGuards(AuthorityAdminGuard)
   employmentStatus(@Body() body: Record<string, unknown>) {
     return this.admin.createEmploymentStatus(body);
+  }
+
+  @Get('admin/user-features')
+  @UseGuards(AuthorityAdminGuard)
+  userFeatures(@Req() req: Request) {
+    const featureCode = req.query.featureCode as string | undefined;
+    return this.admin.listUserFeatures(featureCode);
+  }
+
+  @Post('admin/user-features')
+  @UseGuards(AuthorityAdminGuard)
+  createUserFeature(
+    @Req() req: Request,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const user = req['user'] as JwtPayload;
+    return this.admin.createUserFeature(body, user?.sub);
+  }
+
+  @Put('admin/user-features/:id')
+  @UseGuards(AuthorityAdminGuard)
+  updateUserFeature(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.admin.updateUserFeature(Number(id), body);
+  }
+
+  @Delete('admin/user-features/:id')
+  @UseGuards(AuthorityAdminGuard)
+  deleteUserFeature(@Param('id') id: string) {
+    return this.admin.deleteUserFeature(Number(id));
   }
 }

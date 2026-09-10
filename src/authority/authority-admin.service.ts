@@ -251,6 +251,137 @@ export class AuthorityAdminService {
     return level;
   }
 
+  listUserFeatures(featureCode?: string) {
+    return this.prisma.userFeatureAccess.findMany({
+      where: {
+        active: true,
+        ...(featureCode ? { feature: { code: featureCode } } : {}),
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            nrp: true,
+            name: true,
+            role: true,
+            active: true,
+          },
+        },
+        feature: true,
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    });
+  }
+
+  async createUserFeature(
+    body: Record<string, unknown>,
+    createdByUserId?: number,
+  ) {
+    const userId = this.number(body.userId, 'userId');
+    const featureCode = this.optionalString(body.featureCode);
+    let featureId = this.optionalInt(body.featureId);
+
+    if (!featureId && featureCode) {
+      const feat = await this.prisma.featureDefinition.findUnique({
+        where: { code: featureCode },
+      });
+      if (!feat)
+        throw new NotFoundException(`Feature '${featureCode}' tidak ditemukan`);
+      featureId = feat.id;
+    }
+    if (!featureId)
+      throw new BadRequestException('featureId atau featureCode wajib diisi');
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User tidak ditemukan');
+
+    const reason = this.optionalString(body.reason) || 'Akses khusus personil';
+    const expiresAt = body.expiresAt
+      ? this.date(body.expiresAt, 'expiresAt')
+      : null;
+
+    return this.prisma.userFeatureAccess.create({
+      data: {
+        userId,
+        featureId,
+        effect: this.optionalString(body.effect) ?? 'ALLOW',
+        canRead: this.optionalBoolean(body.canRead) ?? true,
+        canWrite: this.optionalBoolean(body.canWrite) ?? false,
+        canEdit: this.optionalBoolean(body.canEdit) ?? false,
+        canDelete: this.optionalBoolean(body.canDelete) ?? false,
+        canApprove: this.optionalBoolean(body.canApprove) ?? false,
+        canViewHistory: this.optionalBoolean(body.canViewHistory) ?? false,
+        scopeType: this.optionalString(body.scopeType) ?? 'SELF',
+        reason,
+        expiresAt,
+        createdBy: createdByUserId,
+        active: true,
+      },
+      include: {
+        user: {
+          select: { id: true, nrp: true, name: true, role: true, active: true },
+        },
+        feature: true,
+      },
+    });
+  }
+
+  async updateUserFeature(id: number, body: Record<string, unknown>) {
+    const existing = await this.prisma.userFeatureAccess.findUnique({
+      where: { id },
+    });
+    if (!existing)
+      throw new NotFoundException(
+        `Data akses khusus ID '${id}' tidak ditemukan`,
+      );
+
+    const expiresAt =
+      body.expiresAt !== undefined
+        ? body.expiresAt
+          ? this.date(body.expiresAt, 'expiresAt')
+          : null
+        : existing.expiresAt;
+
+    return this.prisma.userFeatureAccess.update({
+      where: { id },
+      data: {
+        canRead: this.optionalBoolean(body.canRead) ?? existing.canRead,
+        canWrite: this.optionalBoolean(body.canWrite) ?? existing.canWrite,
+        canEdit: this.optionalBoolean(body.canEdit) ?? existing.canEdit,
+        canDelete: this.optionalBoolean(body.canDelete) ?? existing.canDelete,
+        canApprove:
+          this.optionalBoolean(body.canApprove) ?? existing.canApprove,
+        canViewHistory:
+          this.optionalBoolean(body.canViewHistory) ?? existing.canViewHistory,
+        scopeType: this.optionalString(body.scopeType) ?? existing.scopeType,
+        reason: this.optionalString(body.reason) ?? existing.reason,
+        expiresAt,
+        active: this.optionalBoolean(body.active) ?? existing.active,
+      },
+      include: {
+        user: {
+          select: { id: true, nrp: true, name: true, role: true, active: true },
+        },
+        feature: true,
+      },
+    });
+  }
+
+  async deleteUserFeature(id: number) {
+    const existing = await this.prisma.userFeatureAccess.findUnique({
+      where: { id },
+    });
+    if (!existing)
+      throw new NotFoundException(
+        `Data akses khusus ID '${id}' tidak ditemukan`,
+      );
+    await this.prisma.userFeatureAccess.delete({ where: { id } });
+    return {
+      success: true,
+      message: 'Hak akses khusus personil berhasil dicabut',
+    };
+  }
+
   private number(value: unknown, name: string) {
     const n = Number(value);
     if (!Number.isInteger(n))
