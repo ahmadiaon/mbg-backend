@@ -1251,44 +1251,26 @@ export class EavService {
     const totalCols = columns.length + 1; // +1 untuk kolom NO
     const lastColLetter = colLetter(totalCols);
 
-    // Row 1: Banner Header Perusahaan
-    ws.mergeCells(`A1:${lastColLetter}1`);
-    const titleCell = ws.getCell('A1');
-    titleCell.value = 'PT MITRA BARITO GROUP';
-    titleCell.font = { name: 'Segoe UI', size: 14, bold: true, color: { argb: 'FF1E3A8A' } };
-    titleCell.alignment = { vertical: 'middle', horizontal: 'left' };
-    ws.getRow(1).height = 24;
+    // Hitung kemunculan nama field untuk disambiguasi jika ada duplicate di child table
+    const nameCounts = new Map<string, number>();
+    for (const col of columns) {
+      const nameUpper = (col.field.name || col.field.code).toUpperCase();
+      nameCounts.set(nameUpper, (nameCounts.get(nameUpper) || 0) + 1);
+    }
 
-    // Row 2: Nama Dokumen & Form
-    ws.mergeCells(`A2:${lastColLetter}2`);
-    const subCell = ws.getCell('A2');
-    subCell.value = `LAPORAN DATA ${entity.name.toUpperCase()} (KODE: ${entity.code})`;
-    subCell.font = { name: 'Segoe UI', size: 11, bold: true, color: { argb: 'FF334155' } };
-    subCell.alignment = { vertical: 'middle', horizontal: 'left' };
-    ws.getRow(2).height = 20;
+    const getColumnHeader = (col: { entityCode: string; field: any }): string => {
+      const nameUpper = (col.field.name || col.field.code).toUpperCase();
+      const count = nameCounts.get(nameUpper) || 0;
+      if (count <= 1 || col.entityCode === entity.code) {
+        return nameUpper;
+      }
+      const childEnt = entity.children.find((c) => c.code === col.entityCode);
+      const suffix = childEnt?.name || col.entityCode;
+      return `${nameUpper} (${suffix.toUpperCase()})`;
+    };
 
-    // Row 3: Metadata Ekspor
-    ws.mergeCells(`A3:${lastColLetter}3`);
-    const metaCell = ws.getCell('A3');
-    const nowStr = new Date().toLocaleDateString('id-ID', {
-      day: '2-digit',
-      month: 'long',
-      year: 'numeric',
-    });
-    metaCell.value = `Tanggal Ekspor: ${nowStr} | Total Data: ${rows.size} Baris`;
-    metaCell.font = { name: 'Segoe UI', size: 9, italic: true, color: { argb: 'FF64748B' } };
-    metaCell.alignment = { vertical: 'middle', horizontal: 'left' };
-    ws.getRow(3).height = 18;
-
-    // Row 4: Baris Metadata Tersembunyi (agar 100% kompatibel dan akurat saat di-import kembali)
-    ws.getRow(4).hidden = true;
-    ws.getCell('A4').value = 'NO';
-    columns.forEach((col, i) => {
-      ws.getCell(`${colLetter(i + 2)}4`).value = `${col.entityCode}:${col.field.code}`;
-    });
-
-    // Row 5: Header Kolom
-    ws.getRow(5).height = 28;
+    // Row 1: Header Kolom langsung di Baris 1 (Format murni agar kompatibel 100% untuk Mail Merge / Mailing di Word)
+    ws.getRow(1).height = 26;
     const headerFill: ExcelJS.Fill = {
       type: 'pattern',
       pattern: 'solid',
@@ -1307,16 +1289,16 @@ export class EavService {
       right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
     };
 
-    const noHeader = ws.getCell('A5');
-    noHeader.value = 'NO.';
+    const noHeader = ws.getCell('A1');
+    noHeader.value = 'NO';
     noHeader.fill = headerFill;
     noHeader.font = headerFont;
     noHeader.alignment = { vertical: 'middle', horizontal: 'center' };
     noHeader.border = headerBorder;
 
     columns.forEach((col, i) => {
-      const cell = ws.getCell(`${colLetter(i + 2)}5`);
-      cell.value = col.field.name.toUpperCase();
+      const cell = ws.getCell(`${colLetter(i + 2)}1`);
+      cell.value = getColumnHeader(col);
       cell.fill = headerFill;
       cell.font = headerFont;
       cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
@@ -1324,7 +1306,10 @@ export class EavService {
     });
 
     // Tracking lebar kolom untuk auto-fit
-    const colLengths: number[] = [6, ...columns.map((c) => Math.max((c.field.name || '').length, 10))];
+    const colLengths: number[] = [
+      4,
+      ...columns.map((c) => Math.max(getColumnHeader(c).length, 10)),
+    ];
 
     // Border data rows
     const dataBorder: Partial<ExcelJS.Borders> = {
@@ -1334,8 +1319,8 @@ export class EavService {
       right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
     };
 
-    // Tulis data baris mulai baris 6
-    let ri = 6;
+    // Tulis data baris langsung mulai baris 2
+    let ri = 2;
     let num = 1;
     for (const [, row] of rows) {
       const rowObj = ws.getRow(ri);
@@ -1345,7 +1330,7 @@ export class EavService {
         ? { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }
         : { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
 
-      // Col A: No.
+      // Col A: NO
       const noCell = rowObj.getCell(1);
       noCell.value = num;
       noCell.alignment = { vertical: 'middle', horizontal: 'center' };
@@ -1424,55 +1409,17 @@ export class EavService {
       ri++;
     }
 
-    // Baris Total di paling bawah jika ada kolom NOMINAL-UANG dan ada baris data
-    const hasNominal = columns.some((c) => (c.field.type ?? '').toUpperCase() === 'NOMINAL-UANG');
-    if (hasNominal && rows.size > 0) {
-      const totRow = ws.getRow(ri);
-      totRow.height = 25;
-      const totBorder: Partial<ExcelJS.Borders> = {
-        top: { style: 'thin', color: { argb: 'FF94A3B8' } },
-        bottom: { style: 'double', color: { argb: 'FF0F172A' } },
-        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-        right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-      };
-      const totFill: ExcelJS.Fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFF1F5F9' },
-      };
-
-      for (let c = 1; c <= totalCols; c++) {
-        const cell = totRow.getCell(c);
-        cell.fill = totFill;
-        cell.border = totBorder;
-        if (c === 1) {
-          cell.value = 'TOTAL';
-          cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF0F172A' } };
-          cell.alignment = { vertical: 'middle', horizontal: 'center' };
-        } else {
-          const colInfo = columns[c - 2];
-          if ((colInfo?.field.type ?? '').toUpperCase() === 'NOMINAL-UANG') {
-            const letter = colLetter(c);
-            cell.value = { formula: `SUM(${letter}6:${letter}${ri - 1})` };
-            cell.numFmt = '"Rp "#,##0;("Rp "#,##0);"-"';
-            cell.font = { name: 'Segoe UI', size: 10, bold: true, color: { argb: 'FF0F172A' } };
-            cell.alignment = { vertical: 'middle', horizontal: 'right' };
-          } else {
-            cell.value = '';
-          }
-        }
-      }
-    }
+    // Tanpa baris TOTAL di bawah, agar tidak menimbulkan baris dummy saat digunakan untuk Mail Merge di MS Word
 
     // Atur lebar kolom secara otomatis (Auto-fit Column Width)
-    ws.getColumn(1).width = 7;
+    ws.getColumn(1).width = 6;
     columns.forEach((_, i) => {
       const len = colLengths[i + 1] ?? 12;
-      ws.getColumn(i + 2).width = Math.min(Math.max(len + 4, 12), 45);
+      ws.getColumn(i + 2).width = Math.min(Math.max(len + 3, 12), 45);
     });
 
-    ws.views = [{ state: 'frozen', ySplit: 5, activeCell: 'A6', showGridLines: true }];
-    ws.autoFilter = { from: 'A5', to: `${lastColLetter}5` };
+    ws.views = [{ state: 'frozen', ySplit: 1, activeCell: 'A2', showGridLines: true }];
+    ws.autoFilter = { from: 'A1', to: `${lastColLetter}1` };
 
     const buffer = await wb.xlsx.writeBuffer();
     return { filename: `${entityCode}.xlsx`, buffer: Buffer.from(buffer) };
@@ -1486,16 +1433,25 @@ export class EavService {
     if (!ws) return { imported: 0 };
 
     const entities = await this.prisma.entity.findMany({
-      include: { fields: { include: { dataSource: true } } },
+      include: {
+        fields: { include: { dataSource: true } },
+        children: { include: { fields: { include: { dataSource: true } } } },
+      },
     });
     const entityByCode = new Map(entities.map((e) => [e.code, e]));
 
     // Cek format file:
-    // Format baru: Baris 4 (hidden) memuat metadata "entityCode:fieldCode", data mulai baris 6 (kolom B+)
-    // Format lama: Baris 1 = nama field mulai col 5, baris 2 = kode tabel, data mulai baris 5
-    const isNewFormat =
+    // Format 1: Hidden metadata di baris 4 (legacy 1-sheet sementara)
+    const isHiddenMetaFormat =
       String(ws.getRow(4).getCell(1).value ?? '').toUpperCase() === 'NO' ||
       String(ws.getRow(4).getCell(2).value ?? '').includes(':');
+
+    // Format 2: Format lama 5 baris header (baris 1 col 5 = field, baris 2 col 5 = entityCode)
+    const isLegacy5RowFormat =
+      !isHiddenMetaFormat &&
+      Boolean(ws.getRow(1).getCell(5).value) &&
+      Boolean(ws.getRow(2).getCell(5).value) &&
+      String(ws.getRow(2).getCell(5).value ?? '').includes('-');
 
     const columns: {
       entityCode: string;
@@ -1505,10 +1461,10 @@ export class EavService {
       entity?: any;
     }[] = [];
 
-    let dataStartRow = 5;
-    let noCol = 4;
+    let dataStartRow = 2;
+    let noCol = 1;
 
-    if (isNewFormat) {
+    if (isHiddenMetaFormat) {
       dataStartRow = 6;
       noCol = 1;
       for (let c = 2; ; c++) {
@@ -1531,8 +1487,7 @@ export class EavService {
           }
         }
       }
-    } else {
-      // Format lama
+    } else if (isLegacy5RowFormat) {
       dataStartRow = 5;
       noCol = 4;
       for (let c = 5; ; c++) {
@@ -1544,6 +1499,94 @@ export class EavService {
         const entity = entityByCode.get(entityCode);
         const field = entity?.fields.find((f) => f.code === fieldCode);
         columns.push({ entityCode, fieldCode, col: c, field, entity });
+      }
+    } else {
+      // Format Mailing Murni (Baris 1 = Nama Kolom, Baris 2 = Data pertama)
+      dataStartRow = 2;
+      noCol = 1;
+
+      // Cari parent entity berdasarkan nama sheet jika cocok
+      const sheetClean = ws.name.trim().toUpperCase();
+      const targetParent = entities.find(
+        (e) =>
+          e.name.toUpperCase() === sheetClean ||
+          e.code.toUpperCase() === sheetClean ||
+          slugify(e.name) === slugify(sheetClean),
+      );
+
+      const checkField = (ent: any, text: string) => {
+        const slug = slugify(text);
+        return ent.fields.find(
+          (f: any) =>
+            f.code === slug ||
+            f.name.toUpperCase() === text.toUpperCase() ||
+            slugify(f.name) === slug,
+        );
+      };
+
+      for (let c = 2; ; c++) {
+        const rawHeader = String(ws.getRow(1).getCell(c).value ?? '').trim();
+        if (!rawHeader) break;
+
+        let matchedEntity: any = null;
+        let matchedField: any = null;
+
+        // 1. Coba cocokkan string header utuh (misal: "Tanggal Masuk Kerja (TMK)")
+        if (targetParent) {
+          matchedField = checkField(targetParent, rawHeader);
+          if (matchedField) matchedEntity = targetParent;
+
+          if (!matchedField) {
+            for (const ch of targetParent.children ?? []) {
+              matchedField = checkField(ch, rawHeader);
+              if (matchedField) {
+                matchedEntity = ch;
+                break;
+              }
+            }
+          }
+        }
+
+        // 2. Jika belum cocok, cek apakah ada suffix tabel di dalam kurung: e.g. "PERUSAHAAN (KONTRAK KARYAWAN)"
+        if (!matchedField) {
+          const match = rawHeader.match(/^(.*?)(?:\s*\((.*?)\))$/);
+          if (match) {
+            const fieldNamePart = match[1].trim();
+            const entityHintPart = match[2].trim();
+            const hintSlug = slugify(entityHintPart);
+            const ent = entities.find(
+              (e) =>
+                e.code === hintSlug ||
+                e.name.toUpperCase() === entityHintPart.toUpperCase() ||
+                slugify(e.name) === hintSlug,
+            );
+            if (ent) {
+              matchedField = checkField(ent, fieldNamePart);
+              if (matchedField) matchedEntity = ent;
+            }
+          }
+        }
+
+        // 3. Jika belum cocok, cari di seluruh entitas database
+        if (!matchedField) {
+          for (const ent of entities) {
+            matchedField = checkField(ent, rawHeader);
+            if (matchedField) {
+              matchedEntity = ent;
+              break;
+            }
+          }
+        }
+
+        if (matchedEntity && matchedField) {
+          columns.push({
+            entityCode: matchedEntity.code,
+            fieldCode: matchedField.code,
+            col: c,
+            field: matchedField,
+            entity: matchedEntity,
+          });
+        }
       }
     }
 
