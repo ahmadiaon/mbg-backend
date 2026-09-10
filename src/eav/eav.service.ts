@@ -1251,64 +1251,129 @@ export class EavService {
     const totalCols = columns.length + 1; // +1 untuk kolom NO
     const lastColLetter = colLetter(totalCols);
 
-    // Hitung kemunculan nama field untuk disambiguasi jika ada duplicate di child table
-    const nameCounts = new Map<string, number>();
-    for (const col of columns) {
-      const nameUpper = (col.field.name || col.field.code).toUpperCase();
-      nameCounts.set(nameUpper, (nameCounts.get(nameUpper) || 0) + 1);
-    }
+    // =============================
+    // HEADER TABEL SEPERTI LARAVEL (3 BARIS)
+    // Baris 1: FIELD NAME
+    // Baris 2: NAMA / KODE TABEL
+    // Baris 3: URUTAN (1, 2, 3...)
+    // Dengan sentuhan visual profesional & elegan tema MBG
+    // =============================
 
-    const getColumnHeader = (col: { entityCode: string; field: any }): string => {
-      const nameUpper = (col.field.name || col.field.code).toUpperCase();
-      const count = nameCounts.get(nameUpper) || 0;
-      if (count <= 1 || col.entityCode === entity.code) {
-        return nameUpper;
-      }
-      const childEnt = entity.children.find((c) => c.code === col.entityCode);
-      const suffix = childEnt?.name || col.entityCode;
-      return `${nameUpper} (${suffix.toUpperCase()})`;
-    };
-
-    // Row 1: Header Kolom langsung di Baris 1 (Format murni agar kompatibel 100% untuk Mail Merge / Mailing di Word)
+    // Style Baris 1 (FIELD): Deep Corporate Navy Blue
     ws.getRow(1).height = 26;
-    const headerFill: ExcelJS.Fill = {
+    const row1Fill: ExcelJS.Fill = {
       type: 'pattern',
       pattern: 'solid',
-      fgColor: { argb: 'FF1E3A8A' }, // Deep Corporate Navy Blue
+      fgColor: { argb: 'FF1E3A8A' }, // Deep Corporate Navy
     };
-    const headerFont: Partial<ExcelJS.Font> = {
+    const row1Font: Partial<ExcelJS.Font> = {
       name: 'Segoe UI',
       size: 10,
       bold: true,
       color: { argb: 'FFFFFFFF' },
     };
+
+    // Style Baris 2 (TABEL): Royal Slate Blue
+    ws.getRow(2).height = 20;
+    const row2Fill: ExcelJS.Fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF2563EB' }, // Royal Blue
+    };
+    const row2Font: Partial<ExcelJS.Font> = {
+      name: 'Segoe UI',
+      size: 9,
+      bold: true,
+      color: { argb: 'FFFFFFFF' },
+    };
+
+    // Style Baris 3 (URUTAN): Sky Accent Blue
+    ws.getRow(3).height = 18;
+    const row3Fill: ExcelJS.Fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF3B82F6' }, // Sky Blue Accent
+    };
+    const row3Font: Partial<ExcelJS.Font> = {
+      name: 'Segoe UI',
+      size: 9,
+      bold: true,
+      color: { argb: 'FFFFFFFF' },
+    };
+
     const headerBorder: Partial<ExcelJS.Borders> = {
+      top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+    };
+    const headerBottomBorder: Partial<ExcelJS.Borders> = {
       top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
       left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
       bottom: { style: 'medium', color: { argb: 'FF0F172A' } },
       right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
     };
 
-    const noHeader = ws.getCell('A1');
-    noHeader.value = 'NO';
-    noHeader.fill = headerFill;
-    noHeader.font = headerFont;
-    noHeader.alignment = { vertical: 'middle', horizontal: 'center' };
-    noHeader.border = headerBorder;
+    // Col A (Nomor Baris Data)
+    const a1 = ws.getCell('A1');
+    a1.value = 'NO';
+    a1.fill = row1Fill;
+    a1.font = row1Font;
+    a1.alignment = { vertical: 'middle', horizontal: 'center' };
+    a1.border = headerBorder;
+
+    const a2 = ws.getCell('A2');
+    a2.value = 'TABEL';
+    a2.fill = row2Fill;
+    a2.font = row2Font;
+    a2.alignment = { vertical: 'middle', horizontal: 'center' };
+    a2.border = headerBorder;
+
+    const a3 = ws.getCell('A3');
+    a3.value = 'URUTAN';
+    a3.fill = row3Fill;
+    a3.font = row3Font;
+    a3.alignment = { vertical: 'middle', horizontal: 'center' };
+    a3.border = headerBottomBorder;
 
     columns.forEach((col, i) => {
-      const cell = ws.getCell(`${colLetter(i + 2)}1`);
-      cell.value = getColumnHeader(col);
-      cell.fill = headerFill;
-      cell.font = headerFont;
-      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-      cell.border = headerBorder;
+      const colLet = colLetter(i + 2);
+
+      // Baris 1: Field Name
+      const c1 = ws.getCell(`${colLet}1`);
+      c1.value = col.field.name.toUpperCase();
+      c1.fill = row1Fill;
+      c1.font = row1Font;
+      c1.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      c1.border = headerBorder;
+
+      // Baris 2: Table Code / Name
+      const c2 = ws.getCell(`${colLet}2`);
+      c2.value = col.entityCode;
+      c2.fill = row2Fill;
+      c2.font = row2Font;
+      c2.alignment = { vertical: 'middle', horizontal: 'center' };
+      c2.border = headerBorder;
+
+      // Baris 3: Urutan (1, 2, 3...)
+      const c3 = ws.getCell(`${colLet}3`);
+      c3.value = i + 1;
+      c3.fill = row3Fill;
+      c3.font = row3Font;
+      c3.alignment = { vertical: 'middle', horizontal: 'center' };
+      c3.border = headerBottomBorder;
     });
 
     // Tracking lebar kolom untuk auto-fit
     const colLengths: number[] = [
-      4,
-      ...columns.map((c) => Math.max(getColumnHeader(c).length, 10)),
+      6,
+      ...columns.map((c) =>
+        Math.max(
+          (c.field.name || '').length,
+          (c.entityCode || '').length,
+          10,
+        ),
+      ),
     ];
 
     // Border data rows
@@ -1319,8 +1384,8 @@ export class EavService {
       right: { style: 'thin', color: { argb: 'FFE2E8F0' } },
     };
 
-    // Tulis data baris langsung mulai baris 2
-    let ri = 2;
+    // Tulis data baris langsung mulai baris 4
+    let ri = 4;
     let num = 1;
     for (const [, row] of rows) {
       const rowObj = ws.getRow(ri);
@@ -1409,16 +1474,14 @@ export class EavService {
       ri++;
     }
 
-    // Tanpa baris TOTAL di bawah, agar tidak menimbulkan baris dummy saat digunakan untuk Mail Merge di MS Word
-
     // Atur lebar kolom secara otomatis (Auto-fit Column Width)
-    ws.getColumn(1).width = 6;
+    ws.getColumn(1).width = 7;
     columns.forEach((_, i) => {
       const len = colLengths[i + 1] ?? 12;
       ws.getColumn(i + 2).width = Math.min(Math.max(len + 3, 12), 45);
     });
 
-    ws.views = [{ state: 'frozen', ySplit: 1, activeCell: 'A2', showGridLines: true }];
+    ws.views = [{ state: 'frozen', ySplit: 3, activeCell: 'A4', showGridLines: true }];
     ws.autoFilter = { from: 'A1', to: `${lastColLetter}1` };
 
     const buffer = await wb.xlsx.writeBuffer();
@@ -1441,13 +1504,23 @@ export class EavService {
     const entityByCode = new Map(entities.map((e) => [e.code, e]));
 
     // Cek format file:
-    // Format 1: Hidden metadata di baris 4 (legacy 1-sheet sementara)
-    const isHiddenMetaFormat =
-      String(ws.getRow(4).getCell(1).value ?? '').toUpperCase() === 'NO' ||
-      String(ws.getRow(4).getCell(2).value ?? '').includes(':');
+    // Format 1: 3-Row Header (Laravel / MBG Standard: Baris 1 = Field, Baris 2 = Tabel, Baris 3 = Urutan, Data Baris 4)
+    const is3RowHeaderFormat =
+      (String(ws.getRow(1).getCell(1).value ?? '').toUpperCase() === 'NO' ||
+        String(ws.getRow(3).getCell(1).value ?? '').toUpperCase() === 'URUTAN') &&
+      Boolean(ws.getRow(2).getCell(2).value) &&
+      (Number(ws.getRow(3).getCell(2).value) === 1 ||
+        String(ws.getRow(3).getCell(2).value).trim() === '1');
 
-    // Format 2: Format lama 5 baris header (baris 1 col 5 = field, baris 2 col 5 = entityCode)
+    // Format 2: Hidden metadata di baris 4 (legacy 1-sheet sementara)
+    const isHiddenMetaFormat =
+      !is3RowHeaderFormat &&
+      (String(ws.getRow(4).getCell(1).value ?? '').toUpperCase() === 'NO' ||
+        String(ws.getRow(4).getCell(2).value ?? '').includes(':'));
+
+    // Format 3: Format lama 5 baris header (baris 1 col 5 = field, baris 2 col 5 = entityCode)
     const isLegacy5RowFormat =
+      !is3RowHeaderFormat &&
       !isHiddenMetaFormat &&
       Boolean(ws.getRow(1).getCell(5).value) &&
       Boolean(ws.getRow(2).getCell(5).value) &&
@@ -1461,10 +1534,45 @@ export class EavService {
       entity?: any;
     }[] = [];
 
-    let dataStartRow = 2;
+    let dataStartRow = 4;
     let noCol = 1;
 
-    if (isHiddenMetaFormat) {
+    if (is3RowHeaderFormat) {
+      dataStartRow = 4;
+      noCol = 1;
+
+      for (let c = 2; ; c++) {
+        const fieldName = String(ws.getRow(1).getCell(c).value ?? '').trim();
+        const entityCode = String(ws.getRow(2).getCell(c).value ?? '').trim();
+        if (!fieldName && !entityCode) break;
+
+        const entity =
+          entityByCode.get(entityCode) ||
+          entities.find(
+            (e) =>
+              e.code === entityCode ||
+              e.name.toUpperCase() === entityCode.toUpperCase() ||
+              slugify(e.name) === slugify(entityCode),
+          );
+        const fieldCode = slugify(fieldName);
+        const field = entity?.fields.find(
+          (f) =>
+            f.code === fieldCode ||
+            f.name.toUpperCase() === fieldName.toUpperCase() ||
+            slugify(f.name) === fieldCode,
+        );
+
+        if (entity && field) {
+          columns.push({
+            entityCode: entity.code,
+            fieldCode: field.code,
+            col: c,
+            field,
+            entity,
+          });
+        }
+      }
+    } else if (isHiddenMetaFormat) {
       dataStartRow = 6;
       noCol = 1;
       for (let c = 2; ; c++) {
