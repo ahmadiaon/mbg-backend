@@ -17,14 +17,58 @@ export class AuthService {
     private readonly accessService: EffectiveAccessService,
   ) {}
 
+  private async resolveUserName(user: {
+    id: number;
+    nrp: string;
+    name: string;
+  }): Promise<string> {
+    const isGenericName =
+      !user.name ||
+      user.name === user.nrp ||
+      user.name === user.nrp.replace(/\//g, '-');
+    if (!isGenericName) {
+      return user.name;
+    }
+    const clean = user.nrp.replace(/\//g, '-');
+    const namaVal = await this.prisma.value.findFirst({
+      where: {
+        field: {
+          entity: { code: 'IDENTITAS-KARYAWAN' },
+          code: 'NAMA-KARYAWAN',
+        },
+        OR: [{ recordCode: user.nrp }, { recordCode: clean }],
+      },
+    });
+    if (namaVal?.value?.trim()) {
+      const realName = namaVal.value.trim();
+      await this.prisma.user
+        .update({
+          where: { id: user.id },
+          data: { name: realName },
+        })
+        .catch(() => {});
+      return realName;
+    }
+    return user.name || user.nrp;
+  }
+
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { nrp: dto.nrp },
+    const cleanNrp = dto.nrp.trim();
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { nrp: cleanNrp },
+          { nrp: cleanNrp.replace(/\//g, '-') },
+          { nrp: cleanNrp.replace(/-/g, '/') },
+        ],
+      },
     });
 
     if (!user || !user.active) {
       throw new UnauthorizedException('NRP tidak ditemukan atau akun nonaktif');
     }
+
+    const realName = await this.resolveUserName(user);
 
     // Sudah punya PIN -> login PIN langsung
     if (user.pin) {
@@ -44,7 +88,7 @@ export class AuthService {
         user: {
           id: user.id,
           nrp: user.nrp,
-          name: user.name,
+          name: realName,
           email: user.email,
           role: user.role,
         },
@@ -73,7 +117,7 @@ export class AuthService {
     return {
       status: 'need_verification',
       nrp: user.nrp,
-      name: user.name,
+      name: realName,
       validationToken,
       waNumber: process.env.WA_ADMIN_NUMBER ?? '6281255897044',
     };
@@ -120,7 +164,8 @@ export class AuthService {
       where: { authLogin: token },
     });
     if (!user) return { found: false, nrp: '', name: '' };
-    return { found: true, nrp: user.nrp, name: user.name };
+    const realName = await this.resolveUserName(user);
+    return { found: true, nrp: user.nrp, name: realName };
   }
 
   async setPin(dto: SetPinDto) {
@@ -141,10 +186,20 @@ export class AuthService {
 
   // Cek NRP: ada/tidak + pakai PIN atau NIK
   async checkNrp(nrp: string) {
-    const user = await this.prisma.user.findUnique({ where: { nrp } });
+    const clean = nrp.trim();
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { nrp: clean },
+          { nrp: clean.replace(/\//g, '-') },
+          { nrp: clean.replace(/-/g, '/') },
+        ],
+      },
+    });
     if (!user || !user.active) {
-      return { found: false, isPin: false, name: '' };
+      return { found: false, isPin: false, name: '', nrp: '' };
     }
-    return { found: true, isPin: !!user.pin, name: user.name };
+    const realName = await this.resolveUserName(user);
+    return { found: true, isPin: Boolean(user.pin), name: realName, nrp: user.nrp };
   }
 }
