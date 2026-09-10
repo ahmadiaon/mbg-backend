@@ -156,6 +156,20 @@ export class AuthorityAdminService {
     });
   }
 
+  async upsertBatchPolicies(policies: Array<Record<string, unknown>>) {
+    if (!Array.isArray(policies)) {
+      throw new BadRequestException('policies harus berupa array');
+    }
+    const results = [];
+    for (const item of policies) {
+      const featureCode = this.optionalString(item.featureCode);
+      if (!featureCode) continue;
+      const res = await this.upsertPolicy(featureCode, item);
+      results.push(res);
+    }
+    return results;
+  }
+
   async createEmploymentStatus(body: Record<string, unknown>) {
     const userId = this.number(body.userId, 'userId');
     const positionCode = this.optionalString(body.positionCode);

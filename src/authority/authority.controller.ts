@@ -104,6 +104,12 @@ export class AuthorityController {
     return this.admin.upsertPolicy(code, body);
   }
 
+  @Put('admin/policies/batch')
+  @UseGuards(AuthorityAdminGuard)
+  batchPolicies(@Body() body: { policies: Array<Record<string, unknown>> }) {
+    return this.admin.upsertBatchPolicies(body.policies);
+  }
+
   @Post('admin/employment-statuses')
   @UseGuards(AuthorityAdminGuard)
   employmentStatus(@Body() body: Record<string, unknown>) {
