@@ -84,7 +84,7 @@ model Value {
   fieldId    Int
   recordCode String // code_data = PK record (NRP / ISLAM / DT-220 ...)
   recordUuid String? // uuid_data
-  value      String? // value_data
+  value      String?   @db.LongText // value_data
   dateStart  DateTime?
   dateEnd    DateTime? // soft-delete / histori
   createdAt  DateTime  @default(now())
